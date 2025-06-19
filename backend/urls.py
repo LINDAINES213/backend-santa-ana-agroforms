@@ -15,19 +15,18 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
-# from django.contrib import admin
-# from django.urls import path
-
-# urlpatterns = [
-#     path("admin/", admin.site.urls),
-# ]
-
-# backend/urls.py
-
 from django.contrib import admin
 from django.urls import path, include
+from formularios.views import CampoViewSet, FormularioDetalleAPIView
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/', include('formularios.urls')),  # <-- esta línea conecta tus endpoints
+    path('api/', include('formularios.urls')), 
+    path(
+        'api/formularios/<int:formulario_id>/campos/',
+        CampoViewSet.as_view({'post': 'create', 'get': 'list'}),
+        name='crear-campo-formulario'
+    ),
+    path('api/formularios/<int:id>/detalle/', FormularioDetalleAPIView.as_view(), name='formulario-detalle'),
 ]

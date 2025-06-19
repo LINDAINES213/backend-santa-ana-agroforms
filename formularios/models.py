@@ -11,6 +11,10 @@ class Grupo(models.Model):
     formulario = models.ForeignKey(Formulario, on_delete=models.CASCADE, related_name='grupos')
     nombre = models.CharField(max_length=255)
 
+    def __str__(self):
+        return self.nombre
+
+
 class Campo(models.Model):
     TIPO_CHOICES = [
         ('texto', 'Texto'),
@@ -20,8 +24,10 @@ class Campo(models.Model):
     ]
     formulario = models.ForeignKey(Formulario, on_delete=models.CASCADE, related_name='campos')
     grupo = models.ForeignKey(Grupo, on_delete=models.CASCADE, related_name='campos', null=True, blank=True)
-    
+
     nombre_campo = models.CharField(max_length=255)
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)
     requerido = models.BooleanField(default=False)
+    pertenece_grupo = models.BooleanField(default=False)
+
 
