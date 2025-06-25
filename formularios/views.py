@@ -6,6 +6,11 @@ from .models import Formulario, Campo, Grupo
 from .serializers import FormularioSerializer, CampoSerializer, FormularioDetalleSerializer
 from rest_framework.generics import RetrieveAPIView
 
+from django.http import HttpResponse
+
+def home(request):
+    return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
+
 class FormularioViewSet(viewsets.ModelViewSet):
     queryset = Formulario.objects.all()
     serializer_class = FormularioSerializer
@@ -16,19 +21,21 @@ class CampoViewSet(viewsets.ModelViewSet):
     serializer_class = CampoSerializer
 
     def create(self, request, *args, **kwargs):
-        formulario_id = self.kwargs.get('formulario_id')
+        formulario_id = self.kwargs.get('formulario_id', None)
+
+        if not formulario_id:
+            # Si no viene formulario_id en URL, error
+            return Response({"error": "Falta formulario_id en URL"}, status=status.HTTP_400_BAD_REQUEST)
+
         formulario = get_object_or_404(Formulario, pk=formulario_id)
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        
-        validated_data = serializer.validated_data
-        validated_data['formulario'] = formulario
+        # Pasar el objeto formulario al método save() del serializer
+        result = serializer.save(formulario=formulario)
 
-        result = serializer.create(validated_data)
-
-        # Si es grupo
+        # Si es Grupo, devolver mensaje personalizado
         if isinstance(result, Grupo):
             return Response({
                 "mensaje": "Grupo creado correctamente",
@@ -36,7 +43,7 @@ class CampoViewSet(viewsets.ModelViewSet):
                 "nombre": result.nombre
             }, status=status.HTTP_201_CREATED)
 
-        # Si es campo, usar serializer normalmente
+        # Para campos normales
         output_serializer = self.get_serializer(result)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 

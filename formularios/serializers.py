@@ -10,7 +10,6 @@ class FormularioSerializer(serializers.ModelSerializer):
         read_only_fields = ['fecha_creacion']
 
 class CampoSerializer(serializers.ModelSerializer):
-    # Este flag que llega desde el frontend
     es_grupo = serializers.BooleanField(write_only=True, default=False)
 
     class Meta:
@@ -19,19 +18,27 @@ class CampoSerializer(serializers.ModelSerializer):
             'id', 'formulario', 'grupo', 'nombre_campo',
             'tipo', 'requerido', 'pertenece_grupo', 'es_grupo',
         ]
-        read_only_fields = ['formulario']        # lo inyectaremos en la vista
+        read_only_fields = ['formulario', 'pertenece_grupo']  # lo calculamos, no se envía desde frontend
+
+    def validate(self, attrs):
+        grupo = attrs.get('grupo', None)
+        # Si grupo está asignado, pertenece_grupo es True, si no False
+        attrs['pertenece_grupo'] = bool(grupo)
+        return attrs
 
     def create(self, validated_data):
         es_grupo = validated_data.pop('es_grupo', False)
-        formulario = validated_data['formulario']
-        nombre_campo = validated_data['nombre_campo']
+        formulario = validated_data.pop('formulario', None)
+        nombre_campo = validated_data.get('nombre_campo')
 
         if es_grupo:
-            # Si es grupo, crear objeto Grupo
+            # Crear Grupo si es grupo
             grupo = Grupo.objects.create(formulario=formulario, nombre=nombre_campo)
-            return grupo  
+            return grupo
 
-        return Campo.objects.create(**validated_data)
+        # Para campo normal, con pertenece_grupo ya calculado
+        campo = Campo.objects.create(formulario=formulario, **validated_data)
+        return campo
 
 class CampoSoloLecturaSerializer(serializers.ModelSerializer):
     class Meta:

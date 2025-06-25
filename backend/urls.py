@@ -18,9 +18,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from formularios.views import CampoViewSet, FormularioDetalleAPIView
+from formularios import views
 
 
 urlpatterns = [
+    path('', views.home, name='home'),  # Ruta raíz
     path('admin/', admin.site.urls),
     path('api/', include('formularios.urls')), 
     path(
