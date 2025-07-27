@@ -29,7 +29,6 @@ class Formulario(models.Model):
     categoria = models.ForeignKey(Categoria, on_delete=models.CASCADE, null=True, blank=True)
     nombre = models.CharField(max_length=100)
     descripcion = models.TextField(blank=True)
-    fecha_creacion = models.DateField(auto_now_add=True)
     permitir_fotos = models.BooleanField(default=False)
     permitir_gps = models.BooleanField(default=False)
 
@@ -55,11 +54,6 @@ class Formulario(models.Model):
     auto_envio = models.BooleanField(default=False)
 
 class FormularioIndexVersion(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    formulario = models.ForeignKey(Formulario, on_delete=models.CASCADE)
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
-
-class FormularioIndexVersion(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id_index_version = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     formulario = models.ForeignKey(Formulario, on_delete=models.CASCADE)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
