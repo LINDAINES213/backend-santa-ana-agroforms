@@ -17,7 +17,7 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
-from formularios.views import CampoViewSet, FormularioDetalleAPIView
+# from formularios.views import CampoViewSet, FormularioDetalleAPIView
 from formularios import views
 
 
@@ -25,10 +25,4 @@ urlpatterns = [
     path('', views.home, name='home'),  # Ruta raíz
     path('admin/', admin.site.urls),
     path('api/', include('formularios.urls')), 
-    path(
-        'api/formularios/<int:formulario_id>/campos/',
-        CampoViewSet.as_view({'post': 'create', 'get': 'list'}),
-        name='crear-campo-formulario'
-    ),
-    path('api/formularios/<int:id>/detalle/', FormularioDetalleAPIView.as_view(), name='formulario-detalle'),
 ]
