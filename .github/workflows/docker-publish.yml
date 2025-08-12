@@ -37,6 +37,6 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64   # <-- importante
+          platforms: linux/amd64   # <- clave para Koyeb
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
