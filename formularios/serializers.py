@@ -1,28 +1,56 @@
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Formulario, Categoria
+from .models import Formulario, Categoria, Pagina, FormularioIndexVersion
 
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Categoria
         fields = '__all__'
 
-class FormularioSerializer(serializers.ModelSerializer):
-    categoria_nombre = serializers.SerializerMethodField()
+# class FormularioSerializer(serializers.ModelSerializer):
+#     categoria_nombre = serializers.SerializerMethodField()
 
-    class Meta:
-        model = Formulario
-        fields = '__all__'
+#     class Meta:
+#         model = Formulario
+#         fields = '__all__'
 
-    def get_categoria_nombre(self, obj):
-        return obj.categoria.nombre if obj.categoria else None
+#     def get_categoria_nombre(self, obj):
+#         return obj.categoria.nombre if obj.categoria else None
 
 # class FormularioSerializer(serializers.ModelSerializer):
 #     class Meta:
 #         model = Formulario
 #         fields = ['id', 'nombre', 'descripcion', 'fecha_creacion']
 #         read_only_fields = ['fecha_creacion']
+
+class PaginaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Pagina
+        fields = "__all__"
+        read_only_fields = ("id_pagina", "index_version", "formulario")
+
+class FormularioSerializer(serializers.ModelSerializer):
+    categoria_nombre = serializers.SerializerMethodField()
+    # opcional: para devolver páginas de la última versión
+    paginas = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Formulario
+        fields = "__all__"
+
+    def get_categoria_nombre(self, obj):
+        return obj.categoria.nombre if obj.categoria else None
+
+    def get_paginas(self, obj):
+        last_version = FormularioIndexVersion.objects.filter(formulario=obj)\
+                           .order_by("-fecha_creacion").first()
+        if not last_version:
+            return []
+        qs = Pagina.objects.filter(index_version=last_version).order_by("secuencia")
+        return PaginaSerializer(qs, many=True).data
+
+
 
 # class CampoSerializer(serializers.ModelSerializer):
 #     es_grupo = serializers.BooleanField(write_only=True, default=False)

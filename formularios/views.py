@@ -1,8 +1,18 @@
-from django.shortcuts import redirect
+from rest_framework import status
 from rest_framework import viewsets
-from django.utils.crypto import get_random_string
-from .models import Formulario, Categoria
-from .serializers import FormularioSerializer, CategoriaSerializer
+from rest_framework.decorators import action
+from django.db import transaction
+from rest_framework.response import Response
+from django.db import models
+from .models import (
+    Formulario,
+    FormularioIndexVersion,
+    Pagina,
+    PaginaIndex,
+    Categoria
+)
+
+from .serializers import FormularioSerializer, CategoriaSerializer, PaginaSerializer
 from django.http import HttpResponse
 
 def home(request):
@@ -12,18 +22,101 @@ class CategoriaViewSet(viewsets.ModelViewSet):
     queryset = Categoria.objects.all()
     serializer_class = CategoriaSerializer
 
+class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Pagina.objects.all()
+    serializer_class = PaginaSerializer
+
+
 class FormularioViewSet(viewsets.ModelViewSet):
     queryset = Formulario.objects.all()
     serializer_class = FormularioSerializer
 
-    def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
+    @action(detail=True, methods=['post'], url_path='agregar-pagina')
+    @transaction.atomic
+    def agregar_pagina(self, request, pk=None):
+        formulario = self.get_object()
+        data = request.data
 
-        if request.accepted_renderer.format == 'html':
-            # Redirige con un parámetro aleatorio para forzar formulario limpio
-            return redirect(f'{request.path}?new={get_random_string(6)}')
+        # Decide si versionar (default = sí)
+        bump = request.query_params.get("bump", "1") != "0"
 
-        return response
+        # Buscar última versión por FK correcto
+        ultima_version = (FormularioIndexVersion.objects
+                          .filter(formulario=formulario)
+                          .order_by('-fecha_creacion')
+                          .first())
+
+        # Si no hay versión previa, crea una inicial vacía
+        if ultima_version is None:
+            ultima_version = FormularioIndexVersion.objects.create(formulario=formulario)
+
+        # Si versionamos, crear nueva versión y (opcional) clonar páginas existentes
+        version_destino = ultima_version
+        if bump:
+            version_destino = FormularioIndexVersion.objects.create(formulario=formulario)
+            # Clonar páginas de la última
+            for p in Pagina.objects.filter(index_version=ultima_version).order_by("secuencia"):
+                copia = Pagina.objects.create(
+                    index_version=version_destino,
+                    formulario=formulario,
+                    secuencia=p.secuencia,
+                    nombre=p.nombre,
+                    descripcion=p.descripcion,
+                    color_fondo=p.color_fondo,
+                    color_texto=p.color_texto,
+                )
+                PaginaIndex.objects.create(
+                    id_index_version=version_destino,
+                    id_pagina=copia,
+                    id_formulario=formulario
+                )
+
+        # Calcular secuencia por defecto si no se envía
+        if "secuencia" in data:
+            secuencia = int(data.get("secuencia") or 1)
+        else:
+            last_seq = (Pagina.objects
+                        .filter(index_version=version_destino)
+                        .aggregate(max_seq=models.Max("secuencia"))
+                        .get("max_seq") or 0)
+            secuencia = last_seq + 1
+
+        # Crear la nueva página en la versión destino
+        nueva_pagina = Pagina.objects.create(
+            index_version=version_destino,
+            formulario=formulario,
+            secuencia=secuencia,
+            nombre=data.get('nombre', 'Nueva página'),
+            descripcion=data.get('descripcion', ''),
+            color_fondo=data.get('color_fondo', ''),
+            color_texto=data.get('color_texto', '')
+        )
+        PaginaIndex.objects.create(
+            id_index_version=version_destino,
+            id_pagina=nueva_pagina,
+            id_formulario=formulario
+        )
+
+        return Response({
+            "detail": "Página creada",
+            "version": str(version_destino.id_index_version),
+            "version_bumpeada": bump,
+            "pagina": PaginaSerializer(nueva_pagina).data
+        }, status=status.HTTP_201_CREATED)
+
+
+# class FormularioViewSet(viewsets.ModelViewSet):
+#     queryset = Formulario.objects.all()
+#     serializer_class = FormularioSerializer
+
+#     def create(self, request, *args, **kwargs):
+#         response = super().create(request, *args, **kwargs)
+
+#         if request.accepted_renderer.format == 'html':
+#             # Redirige con un parámetro aleatorio para forzar formulario limpio
+#             return redirect(f'{request.path}?new={get_random_string(6)}')
+
+#         return response
 
 # # Create your views here.
 # class CampoViewSet(viewsets.ModelViewSet):

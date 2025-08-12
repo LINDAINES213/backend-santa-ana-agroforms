@@ -57,3 +57,32 @@ class FormularioIndexVersion(models.Model):
     id_index_version = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     formulario = models.ForeignKey(Formulario, on_delete=models.CASCADE)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+class Pagina(models.Model):
+    id_pagina = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    index_version = models.ForeignKey(
+        FormularioIndexVersion, on_delete=models.CASCADE, related_name="paginas"
+    )
+    formulario = models.ForeignKey(
+        Formulario, on_delete=models.CASCADE, related_name="paginas"
+    )
+    secuencia = models.PositiveIntegerField(default=1)
+    nombre = models.CharField(max_length=120)
+    descripcion = models.TextField(blank=True)
+    color_fondo = models.CharField(max_length=20, blank=True)
+    color_texto = models.CharField(max_length=20, blank=True)
+
+    class Meta:
+        ordering = ["secuencia"]
+
+
+class PaginaIndex(models.Model):
+    id_index_version = models.ForeignKey(
+        FormularioIndexVersion, on_delete=models.CASCADE, related_name="paginas_index"
+    )
+    id_pagina = models.ForeignKey(Pagina, on_delete=models.CASCADE, related_name="indices")
+    id_formulario = models.ForeignKey(Formulario, on_delete=models.CASCADE)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("id_index_version", "id_pagina")
