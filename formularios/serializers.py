@@ -32,7 +32,6 @@ class PaginaSerializer(serializers.ModelSerializer):
 
 class FormularioSerializer(serializers.ModelSerializer):
     categoria_nombre = serializers.SerializerMethodField()
-    # opcional: para devolver páginas de la última versión
     paginas = serializers.SerializerMethodField()
 
     class Meta:
