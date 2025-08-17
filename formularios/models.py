@@ -69,8 +69,6 @@ class Pagina(models.Model):
     secuencia = models.PositiveIntegerField(default=1)
     nombre = models.CharField(max_length=120)
     descripcion = models.TextField(blank=True)
-    color_fondo = models.CharField(max_length=20, blank=True)
-    color_texto = models.CharField(max_length=20, blank=True)
 
     class Meta:
         ordering = ["secuencia"]

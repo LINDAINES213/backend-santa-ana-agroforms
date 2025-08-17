@@ -5,3 +5,4 @@ python manage.py migrate
 Correr localmente
 python manage.py runserver 8081
 
+docker build -t lindain1333/santa-ana-api:latest .

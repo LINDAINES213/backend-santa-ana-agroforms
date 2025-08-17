@@ -62,8 +62,6 @@ class FormularioViewSet(viewsets.ModelViewSet):
                     secuencia=p.secuencia,
                     nombre=p.nombre,
                     descripcion=p.descripcion,
-                    color_fondo=p.color_fondo,
-                    color_texto=p.color_texto,
                 )
                 PaginaIndex.objects.create(
                     id_index_version=version_destino,
@@ -88,8 +86,6 @@ class FormularioViewSet(viewsets.ModelViewSet):
             secuencia=secuencia,
             nombre=data.get('nombre', 'Nueva página'),
             descripcion=data.get('descripcion', ''),
-            color_fondo=data.get('color_fondo', ''),
-            color_texto=data.get('color_texto', '')
         )
         PaginaIndex.objects.create(
             id_index_version=version_destino,
