@@ -8,22 +8,6 @@ class CategoriaSerializer(serializers.ModelSerializer):
         model = Categoria
         fields = '__all__'
 
-# class FormularioSerializer(serializers.ModelSerializer):
-#     categoria_nombre = serializers.SerializerMethodField()
-
-#     class Meta:
-#         model = Formulario
-#         fields = '__all__'
-
-#     def get_categoria_nombre(self, obj):
-#         return obj.categoria.nombre if obj.categoria else None
-
-# class FormularioSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Formulario
-#         fields = ['id', 'nombre', 'descripcion', 'fecha_creacion']
-#         read_only_fields = ['fecha_creacion']
-
 class PaginaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Pagina

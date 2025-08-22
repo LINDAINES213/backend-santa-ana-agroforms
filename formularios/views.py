@@ -14,6 +14,7 @@ from .models import (
 
 from .serializers import FormularioSerializer, CategoriaSerializer, PaginaSerializer
 from django.http import HttpResponse
+from .services import delete_formulario_hard
 
 def home(request):
     return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
@@ -93,13 +94,35 @@ class FormularioViewSet(viewsets.ModelViewSet):
             id_formulario=formulario
         )
 
+
         return Response({
             "detail": "Página creada",
             "version": str(version_destino.id_index_version),
             "version_bumpeada": bump,
             "pagina": PaginaSerializer(nueva_pagina).data
         }, status=status.HTTP_201_CREATED)
+    
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        formulario_id = kwargs.get("pk")
+        result = delete_formulario_hard(formulario_id)
+        if not result.get("ok"):
+            return Response(result, status=status.HTTP_404_NOT_FOUND)
+        # Estándar: 204 No Content en DELETE.
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
+
+# class FormularioViewSet(viewsets.ModelViewSet):
+#     queryset = Formulario.objects.all()
+#     serializer_class = FormularioSerializer
+
+#     def destroy(self, request, *args, **kwargs):
+#         formulario_id = kwargs.get("pk")
+#         result = delete_formulario_hard(formulario_id)
+#         if not result.get("ok"):
+#             return Response(result, status=status.HTTP_404_NOT_FOUND)
+#         # estándar: 204 No Content en DELETE
+#         return Response(status=status.HTTP_204_NO_CONTENT)
 
 # class FormularioViewSet(viewsets.ModelViewSet):
 #     queryset = Formulario.objects.all()
