@@ -14,7 +14,7 @@ from .models import (
 
 from .serializers import FormularioSerializer, CategoriaSerializer, PaginaSerializer
 from django.http import HttpResponse
-from .services import delete_formulario_hard
+from .services import delete_formulario_hard, duplicar_formulario
 
 def home(request):
     return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
@@ -31,6 +31,20 @@ class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
 class FormularioViewSet(viewsets.ModelViewSet):
     queryset = Formulario.objects.all()
     serializer_class = FormularioSerializer
+
+    @action(detail=True, methods=["post"], url_path="duplicar")
+    @transaction.atomic
+    def duplicar(self, request, pk=None):
+        result = duplicar_formulario(pk)
+        if not result.get("ok"):
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        nuevo = Formulario.objects.get(pk=result["formulario_nuevo_id"])
+        data = FormularioSerializer(nuevo).data
+        data["detalle_duplicado"] = {
+            "version_nueva_id": result["version_nueva_id"],
+            "paginas_copiadas": result["paginas_copiadas"]
+        }
+        return Response(data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='agregar-pagina')
     @transaction.atomic

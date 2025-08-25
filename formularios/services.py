@@ -2,9 +2,10 @@
 from typing import Dict, Optional
 from django.db import connection, transaction
 from django.core.exceptions import ObjectDoesNotExist
-from .models import Formulario  # importa tu modelo real
-# Si ya tienes un modelo Instancia_formulario, importa también:
-# from .models import InstanciaFormulario
+from .models import Formulario  
+from django.db import transaction
+from django.db.models import Max
+from django.apps import apps
 
 def _quote(name: str) -> str:
     return connection.ops.quote_name(name)
@@ -99,4 +100,100 @@ def delete_formulario_hard(formulario_id):
         "ok": True,
         "formulario_id": str(formulario_id),
         "respuestas_borradas": hojas
+    }
+
+def _nombre_copia_unico(nombre_base: str, Model):
+    """
+    Genera 'Nombre_Copia', 'Nombre_Copia (2)', 'Nombre_Copia (3)', ...
+    evitando colisiones.
+    """
+    base = f"{nombre_base}_Copia"
+    if not Model.objects.filter(nombre=base).exists():
+        return base
+    n = 2
+    while True:
+        cand = f"{base} ({n})"
+        if not Model.objects.filter(nombre=cand).exists():
+            return cand
+        n += 1
+
+@transaction.atomic
+def duplicar_formulario(formulario_id):
+    Formulario = apps.get_model("formularios", "Formulario")
+    FormularioIndexVersion = apps.get_model("formularios", "FormularioIndexVersion")
+    Pagina = apps.get_model("formularios", "Pagina")
+    PaginaIndex = apps.get_model("formularios", "PaginaIndex")
+
+    # 1) formulario origen
+    src = (Formulario.objects
+           .select_related("categoria")
+           .get(pk=formulario_id))
+
+    # 2) nuevo formulario
+    nuevo_nombre = _nombre_copia_unico(src.nombre, Formulario)
+    dst = Formulario.objects.create(
+        categoria=src.categoria,
+        nombre=nuevo_nombre,
+        descripcion=src.descripcion,
+        permitir_fotos=src.permitir_fotos,
+        permitir_gps=src.permitir_gps,
+        disponible_desde_fecha=src.disponible_desde_fecha,
+        disponible_hasta_fecha=src.disponible_hasta_fecha,
+        estado=src.estado,
+        forma_envio=src.forma_envio,
+        es_publico=src.es_publico,
+        auto_envio=src.auto_envio,
+    )
+
+    # 3) detectar última versión del origen
+    last_ver = (FormularioIndexVersion.objects
+                .filter(formulario=src)
+                .order_by("-fecha_creacion")
+                .first())
+
+    if last_ver is None:
+        # no hay páginas/versión previa; crea versión vacía
+        new_ver = FormularioIndexVersion.objects.create(formulario=dst)
+        return {
+            "ok": True,
+            "formulario_nuevo_id": str(dst.id),
+            "version_nueva_id": str(new_ver.id_index_version),
+            "paginas_copiadas": 0
+        }
+
+    # 4) crear versión destino
+    new_ver = FormularioIndexVersion.objects.create(formulario=dst)
+
+    # 5) clonar páginas de la última versión (conservando secuencia)
+    paginas_src = (Pagina.objects
+                   .filter(index_version=last_ver)
+                   .order_by("secuencia"))
+    paginas_map = {}  # src_id -> dst_obj
+
+    for p in paginas_src:
+        p_new = Pagina.objects.create(
+            index_version=new_ver,
+            formulario=dst,
+            secuencia=p.secuencia,
+            nombre=p.nombre,
+            descripcion=p.descripcion,
+        )
+        paginas_map[p.id_pagina] = p_new
+        PaginaIndex.objects.create(
+            id_index_version=new_ver,
+            id_pagina=p_new,
+            id_formulario=dst
+        )
+
+    # 6) (opcional/futuro) clonar "campos" si agregas ese modelo
+    #    - iterar por Page->Campos y replicar atributos + relaciones
+    #    - mantener secuencias / grupos
+    #    - si existen modelos específicos por tipo, replicar sus rows
+
+    return {
+        "ok": True,
+        "formulario_nuevo_id": str(dst.id),
+        "version_nueva_id": str(new_ver.id_index_version),
+        "paginas_copiadas": paginas_src.count(),
+        "nombre": dst.nombre
     }
