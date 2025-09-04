@@ -1,11 +1,12 @@
 # services.py
 from typing import Dict, Optional
 from django.db import connection, transaction
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from .models import Formulario  
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Prefetch
 from django.apps import apps
+from django.utils import timezone
 
 def _quote(name: str) -> str:
     return connection.ops.quote_name(name)
@@ -197,3 +198,65 @@ def duplicar_formulario(formulario_id):
         "paginas_copiadas": paginas_src.count(),
         "nombre": dst.nombre
     }
+
+def activar_version(formulario, version):
+    """
+    Apunta el formulario a 'version' como ACTUAL y materializa:
+      - PaginaIndexActual
+      - PaginaCampoActual
+    """
+    from .models import (
+        FormularioActualVersion, PaginaIndex, PaginaActualVersion,
+        PaginaCampoActual, Pagina, Campo
+    )
+
+    if version.formulario_id != formulario.id:
+        raise ValidationError("La versión no corresponde al formulario.")
+
+    with transaction.atomic():
+        # 1) puntero a versión vigente
+        fva, _ = FormularioActualVersion.objects.update_or_create(
+            formulario=formulario,
+            defaults={"index_version": version, "publicada_en": timezone.now()},
+        )
+
+        # 2) reconstruir PaginaIndexActual
+        PaginaActualVersion.objects.filter(formulario=formulario).delete()
+        links = (PaginaIndex.objects
+                 .filter(id_index_version=version)
+                 .select_related("id_pagina"))
+
+        mapa = {}
+        bulk_pages = []
+        for link in links:
+            bulk_pages.append(PaginaActualVersion(
+                version_activa=fva,
+                formulario=formulario,
+                pagina=link.id_pagina,
+                # orden=getattr(link, "orden", link.id_pagina.secuencia),
+                fecha_creacion=link.fecha_creacion,
+            ))
+        created = PaginaActualVersion.objects.bulk_create(bulk_pages)
+        for obj in created:
+            mapa[obj.pagina_id] = obj
+
+        # 3) reconstruir PaginaCampoActual
+        PaginaCampoActual.objects.filter(pagina_actual__formulario=formulario).delete()
+        bulk_fields = []
+        paginas = (Pagina.objects
+                   .filter(id_pagina__in=mapa.keys())
+                   .prefetch_related(Prefetch("campos", queryset=Campo.objects.all().order_by("sequence","id_campo"))))
+        for p in paginas:
+            pa = mapa[p.id_pagina]
+            for c in p.campos.all():
+                bulk_fields.append(PaginaCampoActual(
+                    pagina_actual=pa,
+                    campo=c,
+                    orden=c.sequence,
+                    requerido=c.requerido,
+                    config=c.config,
+                ))
+        if bulk_fields:
+            PaginaCampoActual.objects.bulk_create(bulk_fields)
+
+    return fva

@@ -19,10 +19,12 @@ from django.contrib import admin
 from django.urls import path, include
 # from formularios.views import CampoViewSet, FormularioDetalleAPIView
 from formularios import views
+from django.conf import settings
+from django.conf.urls.static import static
 
 
 urlpatterns = [
     path('', views.home, name='home'),  # Ruta raíz
     path('admin/', admin.site.urls),
     path('api/', include('formularios.urls')), 
-]
+] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

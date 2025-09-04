@@ -84,3 +84,142 @@ class PaginaIndex(models.Model):
 
     class Meta:
         unique_together = ("id_index_version", "id_pagina")
+
+try:
+    from django.db.models import JSONField
+except Exception:
+    JSONField = None
+
+class ClaseCampo(models.Model):
+    clase = models.CharField(max_length=30, primary_key=True)  
+    schema = JSONField(null=True, blank=True) if JSONField else models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "formularios_clase_campo2"
+
+class Campo(models.Model):
+    """
+    Estructura de un campo dentro de una Página.
+    Coincide con tu grid: id_campo, tipo, clase, nombre_campo, etiqueta, ayuda, config, requerido.
+    """
+    id_campo = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # FK a Pagina (UUID). Ajusta 'formularios.Pagina'
+    pagina = models.ForeignKey("formularios.Pagina", on_delete=models.CASCADE, related_name="campos")
+
+    # En tu grid 'tipo' tiene valores como: numerico, texto, booleano, date, hour…
+    tipo   = models.CharField(max_length=20)    # libre, lo envía el front (ej: 'numerico','texto','booleano','date','hour')
+    clase  = models.CharField(max_length=20)    # contrato funcional: number|string|boolean|date|hour|group|firm|dataset|list|calc|img
+
+    nombre_campo = models.CharField(max_length=120)          
+    etiqueta     = models.CharField(max_length=200)          
+    ayuda        = models.CharField(max_length=255, blank=True, default="")  
+
+    config = JSONField(default=dict, blank=True) if JSONField else models.TextField(blank=True, default="{}")
+    requerido = models.BooleanField(default=False)          
+    sequence  = models.PositiveIntegerField(default=1)       
+
+    creado     = models.DateTimeField(auto_now_add=True)
+    actualizado= models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "formularios_campo2"     # si ya tienes la tabla creada con otro nombre, ajusta aquí
+        ordering = ["sequence", "id_campo"]
+        unique_together = (("pagina", "nombre_campo"),)
+        indexes = [
+            models.Index(fields=["pagina", "sequence"]),
+            models.Index(fields=["pagina", "nombre_campo"]),
+            models.Index(fields=["clase"]),
+        ]
+
+    def __str__(self):
+        return f"{self.pagina_id}:{self.nombre_campo} ({self.clase})"
+    
+# ========= VERSIONADO VIGENTE =========
+import uuid
+from django.db import models
+
+class FormularioActualVersion(models.Model):
+    """
+    Una fila por formulario -> cuál FormularioIndexVersion está vigente.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    formulario = models.OneToOneField(
+        "formularios.Formulario",
+        on_delete=models.CASCADE,
+        related_name="version_activa",
+    )
+    index_version = models.ForeignKey(
+        "formularios.FormularioIndexVersion",
+        on_delete=models.CASCADE,
+        related_name="asignaciones_activas",
+    )
+    publicada_en = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.formulario.nombre} → {self.index_version_id}"
+
+
+class PaginaActualVersion(models.Model):
+    """
+    Intermedia SOLO de la versión vigente (FormularioIndexVersion ↔ Pagina).
+    Proyección materializada de PaginaIndex para la versión activa.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    version_activa = models.ForeignKey(
+        "formularios.FormularioActualVersion",
+        on_delete=models.CASCADE,
+        related_name="paginas_actuales",
+    )
+    formulario = models.ForeignKey(
+        "formularios.Formulario",
+        on_delete=models.CASCADE,
+        related_name="paginas_actuales",
+    )
+    pagina = models.ForeignKey(
+        "formularios.Pagina",
+        on_delete=models.CASCADE,
+        related_name="links_actuales",
+    )
+    # orden = models.PositiveIntegerField(default=1)       # si no tienes orden en PaginaIndex, usa Pagina.secuencia
+    fecha_creacion = models.DateTimeField()              # copiada desde PaginaIndex
+
+    class Meta:
+        unique_together = (("version_activa", "pagina"))
+        indexes = [
+            models.Index(fields=["formulario"]),
+            models.Index(fields=["version_activa"]),
+        ]
+        ordering = ["formulario_id"]
+
+    def __str__(self):
+        return f"{self.formulario_id} · {self.pagina_id}"
+
+class PaginaCampoActual(models.Model):
+    """
+    Campos de la PÁGINA vigente (solo la versión actual).
+    Se deriva de los Campos ligados a Pagina al activar una versión.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pagina_actual = models.ForeignKey(
+        "formularios.PaginaActualVersion",
+        on_delete=models.CASCADE,
+        related_name="campos_actuales",
+    )
+    campo = models.ForeignKey(
+        "formularios.Campo",
+        on_delete=models.CASCADE,
+        related_name="usos_actuales",
+    )
+    orden = models.PositiveIntegerField(default=1)       # copia de Campo.sequence
+    requerido = models.BooleanField(default=False)       # copia de Campo.requerido
+    config = (JSONField(default=dict, blank=True) if JSONField else
+              models.TextField(blank=True, default="{}"))
+
+    class Meta:
+        unique_together = (("pagina_actual", "campo"), ("pagina_actual", "orden"))
+        indexes = [models.Index(fields=["pagina_actual", "orden"])]
+        ordering = ["pagina_actual_id", "orden"]
+
+    def __str__(self):
+        return f"{self.pagina_actual_id} · {self.campo_id} · #{self.orden}"

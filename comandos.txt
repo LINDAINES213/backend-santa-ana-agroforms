@@ -6,3 +6,6 @@ Correr localmente
 python manage.py runserver 8081
 
 docker build -t lindain1333/santa-ana-api:latest .
+
+Categoria de prueba
+2bab6091-a635-4bfb-971a-8cdcb5607052
