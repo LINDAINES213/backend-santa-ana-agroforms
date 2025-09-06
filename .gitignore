@@ -2,3 +2,5 @@ venv/
 *.pyc
 .env
 .idea/
+.pytest_cache/
+tests/__pycache__
