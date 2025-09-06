@@ -255,3 +255,60 @@ def activar_version(formulario, version):
             PaginaCampoActual.objects.bulk_create(bulk_fields)
 
     return fva
+
+def _clonar_paginas_y_campos(src_version, dst_version, formulario):
+    """
+    Clona todas las Páginas de src_version hacia dst_version,
+    incluyendo TODOS los Campos y re-mapeando la relación 'grupo'.
+    """
+    from .models import Pagina, PaginaIndex, Campo  # import local para evitar ciclos
+
+    paginas_src = (Pagina.objects
+                   .filter(index_version=src_version)
+                   .order_by("secuencia"))
+
+    for p in paginas_src:
+        # 1) Crear la página destino
+        p_new = Pagina.objects.create(
+            index_version=dst_version,
+            formulario=formulario,
+            secuencia=p.secuencia,
+            nombre=p.nombre,
+            descripcion=p.descripcion,
+        )
+        PaginaIndex.objects.create(
+            id_index_version=dst_version,
+            id_pagina=p_new,
+            id_formulario=formulario
+        )
+
+        # 2) Clonar campos (dos pasadas para resolver 'grupo')
+        old_to_new = {}
+        campos_src = list(Campo.objects.filter(pagina=p)
+                          .order_by("sequence", "id_campo"))
+
+        # 2.a crear copias sin grupo
+        for c in campos_src:
+            c_new = Campo.objects.create(
+                pagina=p_new,
+                tipo=c.tipo,
+                clase=c.clase,
+                nombre_campo=c.nombre_campo,
+                etiqueta=c.etiqueta,
+                ayuda=c.ayuda,
+                config=c.config,      # JSONField ya es serializable
+                requerido=c.requerido,
+                sequence=c.sequence,
+                grupo=None,           # se ajusta en la 2ª pasada
+            )
+            old_to_new[c.id_campo] = c_new
+
+        # 2.b re-asignar 'grupo' apuntando a los nuevos IDs
+        to_update = []
+        for c in campos_src:
+            if c.grupo_id:
+                hijo = old_to_new[c.id_campo]
+                hijo.grupo = old_to_new.get(c.grupo_id)  # puede ser None si no estaba en el set
+                to_update.append(hijo)
+        if to_update:
+            Campo.objects.bulk_update(to_update, ["grupo"])

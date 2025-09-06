@@ -19,7 +19,7 @@ from .models import (
 
 from .serializers import FormularioSerializer, CategoriaSerializer, PaginaSerializer, CampoSerializer, PaginaConCamposSerializer, FormularioActualSerializer, PaginaActualSerializer
 from django.http import HttpResponse
-from .services import delete_formulario_hard, duplicar_formulario, activar_version
+from .services import delete_formulario_hard, duplicar_formulario, activar_version, _clonar_paginas_y_campos
 
 def home(request):
     return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
@@ -258,24 +258,25 @@ class FormularioViewSet(viewsets.ModelViewSet):
         version_destino = ultima_version
         if bump:
             version_destino = FormularioIndexVersion.objects.create(formulario=formulario)
-            for p in Pagina.objects.filter(index_version=ultima_version).order_by("secuencia"):
-                copia = Pagina.objects.create(
-                    index_version=version_destino,
-                    formulario=formulario,
-                    secuencia=p.secuencia,
-                    nombre=p.nombre,
-                    descripcion=p.descripcion,
-                )
-                PaginaIndex.objects.create(
-                    id_index_version=version_destino,
-                    id_pagina=copia,
-                    id_formulario=formulario
-                )
+            _clonar_paginas_y_campos(ultima_version, version_destino, formulario)
+            # for p in Pagina.objects.filter(index_version=ultima_version).order_by("secuencia"):
+            #     copia = Pagina.objects.create(
+            #         index_version=version_destino,
+            #         formulario=formulario,
+            #         secuencia=p.secuencia,
+            #         nombre=p.nombre,
+            #         descripcion=p.descripcion,
+            #     )
+            #     PaginaIndex.objects.create(
+            #         id_index_version=version_destino,
+            #         id_pagina=copia,
+            #         id_formulario=formulario
+            #     )
 
 
         # Calcular secuencia por defecto si no se envía
-        if "secuencia" in data:
-            secuencia = int(data.get("secuencia") or 1)
+        if "secuencia" in data and str(data.get("secuencia")).strip() not in ("", "0", "None"):
+            secuencia = int(data.get("secuencia"))
         else:
             last_seq = (Pagina.objects
                         .filter(index_version=version_destino)
