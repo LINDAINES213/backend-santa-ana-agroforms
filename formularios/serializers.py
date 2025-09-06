@@ -3,6 +3,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from .models import Formulario, Categoria, Pagina, FormularioIndexVersion, ClaseCampo, Campo, PaginaActualVersion, FormularioActualVersion
 from .validators import validate_config_against_schema
+from django.utils.text import slugify
+import uuid
 
 
 class CategoriaSerializer(serializers.ModelSerializer):
@@ -49,7 +51,6 @@ class FormularioSerializer(serializers.ModelSerializer):
     #     from .serializers import PaginaConCamposSerializer 
     #     return PaginaConCamposSerializer(qs, many=True, context=self.context).data
     def get_paginas(self, obj):
-        # 1) intentar vía “vigente”
         activos = (PaginaActualVersion.objects
                    .filter(formulario=obj)
                    .select_related("pagina")
@@ -59,7 +60,6 @@ class FormularioSerializer(serializers.ModelSerializer):
             from .serializers import PaginaConCamposSerializer
             return PaginaConCamposSerializer(paginas, many=True, context=self.context).data
 
-        # 2) fallback: última versión histórica (como ya lo tenías)
         last_version = (FormularioIndexVersion.objects
                         .filter(formulario=obj).order_by("-fecha_creacion").first())
         if not last_version:
@@ -82,34 +82,38 @@ class CampoSerializer(serializers.ModelSerializer):
         raw_clase  = (attrs.get("clase") or getattr(self.instance, "clase", "") or "")
         clase_norm = raw_clase.strip().lower()
 
+        # 1) resolver fila de catálogo
         qs = list(ClaseCampo.objects.all())
-        catalogo_raw  = [ (c.clase or "") for c in qs ]
-        catalogo_norm = [ (c.clase or "").strip().lower() for c in qs ]
-        logger.warning("CATALOGO DEBUG raw=%s norm=%s input_raw=%r input_norm=%r  (model=%s, db_table=%s)",
-                       catalogo_raw, catalogo_norm, raw_clase, clase_norm,
-                       ClaseCampo.__module__ + "." + ClaseCampo.__name__,
-                       getattr(getattr(ClaseCampo._meta, 'db_table', None), '__str__', lambda: ClaseCampo._meta.db_table)())
-
-        row = None
-        for c in qs:
-            if ((c.clase or "").strip().lower() == clase_norm):
-                row = c
-                break
-
+        row = next((c for c in qs if (c.clase or "").strip().lower() == clase_norm), None)
         if not row:
-            disponibles = [ (s or "").strip() for s in catalogo_raw ]
+            disponibles = [ (c.clase or "").strip() for c in qs ]
             raise serializers.ValidationError({
                 "clase": f"Clase no registrada en catálogo. Recibido='{raw_clase}'. Disponibles: {', '.join(disponibles)}"
             })
 
-        # --- Validar config contra schema ---
-        cfg    = attrs.get("config", {}) or {}
-        schema = row.schema if isinstance(row.schema, dict) else None  
+        # 2) Autogenerar ids en config
+        cfg = attrs.get("config") or {}
+        if clase_norm == "list":
+            if not cfg.get("id_list"):
+                base = attrs.get("nombre_campo") or "lista"
+                slug = slugify(base) or "lista"
+                cfg["id_list"] = f"{slug}-{uuid.uuid4().hex[:6]}"
+                attrs["config"] = cfg  # reinyecta
+        elif clase_norm == "group":
+            if not cfg.get("id_group"):
+                base = attrs.get("nombre_campo") or "grupo"
+                slug = slugify(base) or "grupo"
+                cfg["id_group"] = f"{slug}-{uuid.uuid4().hex[:6]}"
+                attrs["config"] = cfg  # reinyecta
+
+
+        # 3) validar config contra el schema
+        schema = row.schema if isinstance(row.schema, dict) else None
         errs = validate_config_against_schema(cfg, schema)
         if errs:
-            logger.warning("CONFIG ERROR para clase=%s cfg=%s schema=%s -> %s", raw_clase, cfg, schema, errs)
             raise serializers.ValidationError({"config": errs})
 
+        # 4) coherencia tipo<->clase
         matrix = {
             "number":  "numerico",
             "boolean": "booleano",
@@ -127,9 +131,16 @@ class CampoSerializer(serializers.ModelSerializer):
         esperado = matrix.get(clase_norm)
         if esperado and tipo != esperado:
             raise serializers.ValidationError({"tipo": f"tipo '{tipo}' no coincide con clase '{raw_clase}' (esperado '{esperado}')"})
+        
+        grupo = attrs.get("grupo") or getattr(self.instance, "grupo", None)
+        if grupo:
+            # el padre debe ser un campo de clase 'group'
+            if (grupo.clase or "").strip().lower() != "group":
+                raise serializers.ValidationError({"grupo": "El campo 'grupo' debe apuntar a un campo de clase 'group'."})
+            pagina = attrs.get("pagina") or getattr(self.instance, "pagina", None)
+            if pagina and grupo.pagina_id != pagina.id_pagina:
+                raise serializers.ValidationError({"grupo": "El 'grupo' debe pertenecer a la misma página."})
 
-        # DEBUG ok
-        logger.warning("VALIDACION OK: clase=%r (match=%r) tipo=%r config=%r", raw_clase, row.clase, tipo, cfg)
         return attrs
 
 class FormularioActualSerializer(serializers.ModelSerializer):
@@ -162,60 +173,3 @@ class PaginaActualSerializer(serializers.Serializer):
         # data["orden_vigente"] = obj.orden
         data["formulario_id"] = str(obj.formulario_id)
         return data
-# class CampoSerializer(serializers.ModelSerializer):
-#     es_grupo = serializers.BooleanField(write_only=True, default=False)
-
-#     class Meta:
-#         model  = Campo
-#         fields = [
-#             'id', 'formulario', 'grupo', 'nombre_campo',
-#             'tipo', 'requerido', 'pertenece_grupo', 'es_grupo',
-#         ]
-#         read_only_fields = ['formulario', 'pertenece_grupo']  # lo calculamos, no se envía desde frontend
-
-#     def validate(self, attrs):
-#         grupo = attrs.get('grupo', None)
-#         # Si grupo está asignado, pertenece_grupo es True, si no False
-#         attrs['pertenece_grupo'] = bool(grupo)
-#         return attrs
-
-#     def create(self, validated_data):
-#         es_grupo = validated_data.pop('es_grupo', False)
-#         formulario = validated_data.pop('formulario', None)
-#         nombre_campo = validated_data.get('nombre_campo')
-
-#         if es_grupo:
-#             # Crear Grupo si es grupo
-#             grupo = Grupo.objects.create(formulario=formulario, nombre=nombre_campo)
-#             return grupo
-
-#         # Para campo normal, con pertenece_grupo ya calculado
-#         campo = Campo.objects.create(formulario=formulario, **validated_data)
-#         return campo
-
-# class CampoSoloLecturaSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Campo
-#         fields = ['id', 'nombre_campo', 'tipo', 'requerido', 'pertenece_grupo', 'grupo']
-
-
-# class GrupoConCamposSerializer(serializers.ModelSerializer):
-#     campos = CampoSoloLecturaSerializer(many=True, read_only=True)
-
-#     class Meta:
-#         model = Grupo
-#         fields = ['id', 'nombre', 'campos']
-
-
-# class FormularioDetalleSerializer(serializers.ModelSerializer):
-#     campos = serializers.SerializerMethodField()
-#     grupos = GrupoConCamposSerializer(many=True, read_only=True)
-
-#     class Meta:
-#         model = Formulario
-#         fields = ['id', 'nombre', 'descripcion', 'fecha_creacion', 'campos', 'grupos']
-
-#     def get_campos(self, obj):
-#         # Solo campos que NO pertenecen a ningún grupo
-#         campos = obj.campos.filter(grupo__isnull=True)
-#         return CampoSoloLecturaSerializer(campos, many=True).data

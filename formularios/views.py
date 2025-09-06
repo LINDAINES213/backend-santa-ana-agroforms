@@ -81,7 +81,7 @@ class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
         1) Crea el Campo en la tabla madre 'Campo' (FK a Pagina).
         2) Crea su proyección en 'PaginaCampoActual' para que aparezca en el GET vigente.
         """
-        # 1) Página vigente (si no hay, no podemos crear sobre "actual")
+        # 1) Página vigente
         actual = (PaginaActualVersion.objects
                   .select_related("pagina", "formulario", "version_activa")
                   .filter(pagina_id=pk)
@@ -94,21 +94,23 @@ class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
 
         pagina = actual.pagina
 
-        # 2) Serializador del Campo (es el mismo que usas hoy)
+        # 2) Serializador del Campo 
         payload = request.data.copy()
-        payload["pagina"] = str(pagina.id_pagina)  # obligamos FK a la madre
+        payload["pagina"] = str(pagina.id_pagina) 
         ser = CampoSerializer(data=payload, context=self.get_serializer_context())
         ser.is_valid(raise_exception=True)
 
         # 3) Secuencia por defecto si no viene
-        if not payload.get("sequence"):
+        if "sequence" in payload and payload["sequence"] not in (None, "", 0):
+            ser.validated_data["sequence"] = int(payload["sequence"])
+        else:
             last = pagina.campos.aggregate(mx=models.Max("sequence")).get("mx") or 0
             ser.validated_data["sequence"] = last + 1
 
         # 4) Crear Campo en la madre
         campo = ser.save(pagina=pagina)
 
-        # 5) Espejo en 'PaginaCampoActual' (aparece de inmediato en GET vigente)
+        # 5) Espejo en 'PaginaCampoActual'
         PaginaCampoActual.objects.create(
             pagina_actual=actual,
             campo=campo,
@@ -270,7 +272,6 @@ class FormularioViewSet(viewsets.ModelViewSet):
                     id_formulario=formulario
                 )
 
-        activar_version(formulario, version_destino)
 
         # Calcular secuencia por defecto si no se envía
         if "secuencia" in data:
@@ -294,6 +295,9 @@ class FormularioViewSet(viewsets.ModelViewSet):
             id_pagina=nueva_pagina,
             id_formulario=formulario
         )
+
+        # ✅ AHORA sí, activar para materializar PaginaActualVersion con la nueva página
+        activar_version(formulario, version_destino)
 
 
         return Response({

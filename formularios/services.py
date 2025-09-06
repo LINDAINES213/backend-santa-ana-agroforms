@@ -186,11 +186,6 @@ def duplicar_formulario(formulario_id):
             id_formulario=dst
         )
 
-    # 6) (opcional/futuro) clonar "campos" si agregas ese modelo
-    #    - iterar por Page->Campos y replicar atributos + relaciones
-    #    - mantener secuencias / grupos
-    #    - si existen modelos específicos por tipo, replicar sus rows
-
     return {
         "ok": True,
         "formulario_nuevo_id": str(dst.id),

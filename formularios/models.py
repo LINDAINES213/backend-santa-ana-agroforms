@@ -107,35 +107,36 @@ class Campo(models.Model):
     # FK a Pagina (UUID). Ajusta 'formularios.Pagina'
     pagina = models.ForeignKey("formularios.Pagina", on_delete=models.CASCADE, related_name="campos")
 
-    # En tu grid 'tipo' tiene valores como: numerico, texto, booleano, date, hour…
-    tipo   = models.CharField(max_length=20)    # libre, lo envía el front (ej: 'numerico','texto','booleano','date','hour')
-    clase  = models.CharField(max_length=20)    # contrato funcional: number|string|boolean|date|hour|group|firm|dataset|list|calc|img
-
+    tipo = models.CharField(max_length=20)    
+    clase = models.CharField(max_length=20)    
     nombre_campo = models.CharField(max_length=120)          
-    etiqueta     = models.CharField(max_length=200)          
-    ayuda        = models.CharField(max_length=255, blank=True, default="")  
-
+    etiqueta = models.CharField(max_length=200)          
+    ayuda = models.CharField(max_length=255, blank=True, default="")  
     config = JSONField(default=dict, blank=True) if JSONField else models.TextField(blank=True, default="{}")
     requerido = models.BooleanField(default=False)          
     sequence  = models.PositiveIntegerField(default=1)       
-
     creado     = models.DateTimeField(auto_now_add=True)
     actualizado= models.DateTimeField(auto_now=True)
+    grupo = models.ForeignKey(
+        "self",
+        null=True, blank=True,
+        on_delete=models.CASCADE,
+        related_name="subcampos",
+    )
 
     class Meta:
         db_table = "formularios_campo2"     # si ya tienes la tabla creada con otro nombre, ajusta aquí
         ordering = ["sequence", "id_campo"]
-        unique_together = (("pagina", "nombre_campo"),)
         indexes = [
             models.Index(fields=["pagina", "sequence"]),
             models.Index(fields=["pagina", "nombre_campo"]),
             models.Index(fields=["clase"]),
+            models.Index(fields=["pagina", "grupo", "sequence"]),
         ]
 
     def __str__(self):
         return f"{self.pagina_id}:{self.nombre_campo} ({self.clase})"
     
-# ========= VERSIONADO VIGENTE =========
 import uuid
 from django.db import models
 
@@ -159,7 +160,6 @@ class FormularioActualVersion(models.Model):
     def __str__(self):
         return f"{self.formulario.nombre} → {self.index_version_id}"
 
-
 class PaginaActualVersion(models.Model):
     """
     Intermedia SOLO de la versión vigente (FormularioIndexVersion ↔ Pagina).
@@ -181,8 +181,8 @@ class PaginaActualVersion(models.Model):
         on_delete=models.CASCADE,
         related_name="links_actuales",
     )
-    # orden = models.PositiveIntegerField(default=1)       # si no tienes orden en PaginaIndex, usa Pagina.secuencia
-    fecha_creacion = models.DateTimeField()              # copiada desde PaginaIndex
+    # orden = models.PositiveIntegerField(default=1)       
+    fecha_creacion = models.DateTimeField()          
 
     class Meta:
         unique_together = (("version_activa", "pagina"))
