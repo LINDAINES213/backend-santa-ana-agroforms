@@ -13,16 +13,25 @@ class Categoria(models.Model):
 
 class Rol(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    nombre = models.CharField(max_length=50)
+    nombre = models.CharField(max_length=50, unique=True)
     descripcion = models.TextField(blank=True)
 
 class Usuario(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     nombre = models.CharField(max_length=100)
-    telefono = models.CharField(max_length=20)
     correo = models.EmailField(unique=True)
     contrasena = models.CharField(max_length=128)
-    rol = models.ForeignKey(Rol, on_delete=models.CASCADE)
+    nombre_usuario = models.CharField(max_length=50, unique=True)
+    activo = models.BooleanField(default=True)
+    rol = models.ForeignKey(Rol, on_delete=models.CASCADE, related_name="usuarios")
+
+    class Meta:
+        db_table = "formularios_usuario"  # 🔸 esta aún NO existe; Django la creará
+
+    def __str__(self):
+        estado = "Activo" if self.activo else "Inactivo"
+        return f"{self.nombre} ({self.rol.nombre}) - {estado}"
+
 
 class Formulario(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

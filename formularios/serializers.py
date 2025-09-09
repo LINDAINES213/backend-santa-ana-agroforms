@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Formulario, Categoria, Pagina, FormularioIndexVersion, ClaseCampo, Campo, PaginaActualVersion, FormularioActualVersion
+from .models import Formulario, Categoria, Pagina, FormularioIndexVersion, ClaseCampo, Campo, PaginaActualVersion, FormularioActualVersion, Usuario, Rol, PaginaCampoActual
 from .validators import validate_config_against_schema
 from django.utils.text import slugify
 import uuid
@@ -173,3 +173,15 @@ class PaginaActualSerializer(serializers.Serializer):
         # data["orden_vigente"] = obj.orden
         data["formulario_id"] = str(obj.formulario_id)
         return data
+    
+class UsuarioSerializer(serializers.ModelSerializer):
+    rol_nombre = serializers.CharField(source="rol.nombre", read_only=True)
+
+    class Meta:
+        model = Usuario
+        fields = "__all__"
+
+class RolSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Rol
+        fields = "__all__"

@@ -14,10 +14,12 @@ from .models import (
     ClaseCampo,
     Campo, 
     FormularioActualVersion, 
-    PaginaActualVersion
+    PaginaActualVersion,
+    Usuario,
+    Rol,
 )
 
-from .serializers import FormularioSerializer, CategoriaSerializer, PaginaSerializer, CampoSerializer, PaginaConCamposSerializer, FormularioActualSerializer, PaginaActualSerializer
+from .serializers import FormularioSerializer, CategoriaSerializer, PaginaSerializer, CampoSerializer, PaginaConCamposSerializer, FormularioActualSerializer, PaginaActualSerializer, UsuarioSerializer, RolSerializer
 from django.http import HttpResponse
 from .services import delete_formulario_hard, duplicar_formulario, activar_version, _clonar_paginas_y_campos
 
@@ -315,6 +317,14 @@ class FormularioViewSet(viewsets.ModelViewSet):
         if not result.get("ok"):
             return Response(result, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+class RolViewSet(viewsets.ModelViewSet):
+    queryset = Rol.objects.all().order_by("id")
+    serializer_class = RolSerializer
+
+class UsuarioViewSet(viewsets.ModelViewSet):
+    queryset = Usuario.objects.all().select_related("rol").order_by("id")
+    serializer_class = UsuarioSerializer
 
 
 # class FormularioViewSet(viewsets.ModelViewSet):
