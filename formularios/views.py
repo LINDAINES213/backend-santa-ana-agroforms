@@ -21,7 +21,7 @@ from .models import (
 
 from .serializers import FormularioSerializer, CategoriaSerializer, PaginaSerializer, CampoSerializer, PaginaConCamposSerializer, FormularioActualSerializer, PaginaActualSerializer, UsuarioSerializer, RolSerializer
 from django.http import HttpResponse
-from .services import delete_formulario_hard, duplicar_formulario, activar_version, _clonar_paginas_y_campos
+from .services import delete_formulario_hard, duplicar_formulario, activar_version, _clonar_paginas_y_campos, publicar_nueva_version_por_cambio_en_pagina
 
 def home(request):
     return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
@@ -75,54 +75,84 @@ class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
                                  else PaginaSerializer)
         return super().retrieve(request, *args, **kwargs)
     
+    # @action(detail=True, methods=["post"], url_path="campos-actual")
+    # @transaction.atomic
+    # def crear_campo_actual(self, request, pk=None):
+    #     """
+    #     Crea un Campo sobre la PÁGINA VIGENTE (PaginaActualVersion).
+    #     1) Crea el Campo en la tabla madre 'Campo' (FK a Pagina).
+    #     2) Crea su proyección en 'PaginaCampoActual' para que aparezca en el GET vigente.
+    #     """
+    #     # 1) Página vigente
+    #     actual = (PaginaActualVersion.objects
+    #               .select_related("pagina", "formulario", "version_activa")
+    #               .filter(pagina_id=pk)
+    #               .first())
+    #     if not actual:
+    #         return Response(
+    #             {"detail": "Esta página no tiene versión ACTUAL publicada."},
+    #             status=status.HTTP_400_BAD_REQUEST,
+    #         )
+
+    #     pagina = actual.pagina
+
+    #     # 2) Serializador del Campo 
+    #     payload = request.data.copy()
+    #     payload["pagina"] = str(pagina.id_pagina) 
+    #     ser = CampoSerializer(data=payload, context=self.get_serializer_context())
+    #     ser.is_valid(raise_exception=True)
+
+    #     # 3) Secuencia por defecto si no viene
+    #     if "sequence" in payload and payload["sequence"] not in (None, "", 0):
+    #         ser.validated_data["sequence"] = int(payload["sequence"])
+    #     else:
+    #         last = pagina.campos.aggregate(mx=models.Max("sequence")).get("mx") or 0
+    #         ser.validated_data["sequence"] = last + 1
+
+    #     # 4) Crear Campo en la madre
+    #     campo = ser.save(pagina=pagina)
+
+    #     # 5) Espejo en 'PaginaCampoActual'
+    #     PaginaCampoActual.objects.create(
+    #         pagina_actual=actual,
+    #         campo=campo,
+    #         orden=campo.sequence,
+    #         requerido=campo.requerido,
+    #         config=campo.config,
+    #     )
+
+    #     # 6) Respuesta: el campo recién creado
+    #     return Response(CampoSerializer(campo).data, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=["post"], url_path="campos-actual")
     @transaction.atomic
     def crear_campo_actual(self, request, pk=None):
-        """
-        Crea un Campo sobre la PÁGINA VIGENTE (PaginaActualVersion).
-        1) Crea el Campo en la tabla madre 'Campo' (FK a Pagina).
-        2) Crea su proyección en 'PaginaCampoActual' para que aparezca en el GET vigente.
-        """
-        # 1) Página vigente
         actual = (PaginaActualVersion.objects
                   .select_related("pagina", "formulario", "version_activa")
                   .filter(pagina_id=pk)
                   .first())
         if not actual:
-            return Response(
-                {"detail": "Esta página no tiene versión ACTUAL publicada."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "Esta página no tiene versión ACTUAL publicada."},
+                            status=status.HTTP_400_BAD_REQUEST)
 
-        pagina = actual.pagina
-
-        # 2) Serializador del Campo 
+        # Usamos el serializer solo para validar/normalizar (tipo/config/grupo)
         payload = request.data.copy()
-        payload["pagina"] = str(pagina.id_pagina) 
+        payload["pagina"] = str(actual.pagina_id)  # valida 'grupo' en la página vigente
         ser = CampoSerializer(data=payload, context=self.get_serializer_context())
         ser.is_valid(raise_exception=True)
 
-        # 3) Secuencia por defecto si no viene
-        if "sequence" in payload and payload["sequence"] not in (None, "", 0):
-            ser.validated_data["sequence"] = int(payload["sequence"])
-        else:
-            last = pagina.campos.aggregate(mx=models.Max("sequence")).get("mx") or 0
-            ser.validated_data["sequence"] = last + 1
-
-        # 4) Crear Campo en la madre
-        campo = ser.save(pagina=pagina)
-
-        # 5) Espejo en 'PaginaCampoActual'
-        PaginaCampoActual.objects.create(
+        # Publica nueva versión clonando todo y añadiendo el nuevo campo
+        ver_new, pagina_new, campo = publicar_nueva_version_por_cambio_en_pagina(
             pagina_actual=actual,
-            campo=campo,
-            orden=campo.sequence,
-            requerido=campo.requerido,
-            config=campo.config,
+            nuevo_campo_data=ser.validated_data,
         )
 
-        # 6) Respuesta: el campo recién creado
-        return Response(CampoSerializer(campo).data, status=status.HTTP_201_CREATED)
+        return Response({
+            "detail": "Campo creado y nueva versión publicada",
+            "version_publicada": str(ver_new.id_index_version),
+            "pagina_id": str(pagina_new.id_pagina),
+            "campo": CampoSerializer(campo, context=self.get_serializer_context()).data,
+        }, status=status.HTTP_201_CREATED)
 
 # class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
 #     queryset = (Pagina.objects

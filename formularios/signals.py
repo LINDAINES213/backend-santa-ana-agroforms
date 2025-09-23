@@ -1,5 +1,7 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.db import transaction
+
 
 from formularios.services import activar_version
 from .models import Formulario, FormularioIndexVersion
@@ -44,3 +46,22 @@ def auto_activar_version_mas_reciente(sender, instance: FormularioIndexVersion, 
     if newest and newest.id_index_version == instance.id_index_version:
         # Activa y materializa PaginaIndexActual / PaginaCampoActual
         activar_version(form, instance)
+
+@receiver(post_save, sender=FormularioIndexVersion)
+def auto_activar_version_mas_reciente(sender, instance: FormularioIndexVersion, created, **kwargs):
+    if not created:
+        return
+
+    form = instance.formulario
+
+    def _activate():
+        # activar solo si sigue siendo la más reciente
+        newest = (FormularioIndexVersion.objects
+                  .filter(formulario=form)
+                  .order_by("-fecha_creacion")
+                  .first())
+        if newest and newest.id_index_version == instance.id_index_version:
+            activar_version(form, instance)
+
+    # ✅ activa al commit, cuando ya existen PaginaIndex y campos clonados
+    transaction.on_commit(_activate)

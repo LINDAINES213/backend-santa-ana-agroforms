@@ -77,43 +77,39 @@ class CampoSerializer(serializers.ModelSerializer):
         model = Campo
         fields = "__all__"
         read_only_fields = ("id_campo","creado","actualizado","pagina")
+        extra_kwargs = {
+            "tipo": {"required": False, "allow_blank": True},
+        }
 
     def validate(self, attrs):
-        raw_clase  = (attrs.get("clase") or getattr(self.instance, "clase", "") or "")
-        clase_norm = raw_clase.strip().lower()
+        raw = (attrs.get("clase") or getattr(self.instance, "clase", "") or "")
+        clase = raw.strip().lower()
 
-        # 1) resolver fila de catálogo
-        qs = list(ClaseCampo.objects.all())
-        row = next((c for c in qs if (c.clase or "").strip().lower() == clase_norm), None)
+        # 1) clase válida en catálogo
+        row = next((c for c in ClaseCampo.objects.all()
+                    if (c.clase or "").strip().lower() == clase), None)
         if not row:
-            disponibles = [ (c.clase or "").strip() for c in qs ]
-            raise serializers.ValidationError({
-                "clase": f"Clase no registrada en catálogo. Recibido='{raw_clase}'. Disponibles: {', '.join(disponibles)}"
-            })
+            disponibles = [ (c.clase or "").strip() for c in ClaseCampo.objects.all() ]
+            raise serializers.ValidationError({"clase": f"Clase no registrada. Usa: {', '.join(disponibles)}"})
 
-        # 2) Autogenerar ids en config
+        # 2) autogenerar IDs en config si aplica
         cfg = attrs.get("config") or {}
-        if clase_norm == "list":
-            if not cfg.get("id_list"):
-                base = attrs.get("nombre_campo") or "lista"
-                slug = slugify(base) or "lista"
-                cfg["id_list"] = f"{slug}-{uuid.uuid4().hex[:6]}"
-                attrs["config"] = cfg  # reinyecta
-        elif clase_norm == "group":
-            if not cfg.get("id_group"):
-                base = attrs.get("nombre_campo") or "grupo"
-                slug = slugify(base) or "grupo"
-                cfg["id_group"] = f"{slug}-{uuid.uuid4().hex[:6]}"
-                attrs["config"] = cfg  # reinyecta
+        if clase == "list" and not cfg.get("id_list"):
+            base = attrs.get("nombre_campo") or "lista"
+            cfg["id_list"] = f"{slugify(base) or 'lista'}-{uuid.uuid4().hex[:6]}"
+            attrs["config"] = cfg
+        if clase == "group" and not cfg.get("id_group"):
+            base = attrs.get("nombre_campo") or "grupo"
+            cfg["id_group"] = f"{slugify(base) or 'grupo'}-{uuid.uuid4().hex[:6]}"
+            attrs["config"] = cfg
 
-
-        # 3) validar config contra el schema
+        # 3) validar config ↔ schema
         schema = row.schema if isinstance(row.schema, dict) else None
         errs = validate_config_against_schema(cfg, schema)
         if errs:
             raise serializers.ValidationError({"config": errs})
 
-        # 4) coherencia tipo<->clase
+        # 4) AUTORRELLENO de 'tipo' por 'clase'
         matrix = {
             "number":  "numerico",
             "boolean": "booleano",
@@ -127,18 +123,17 @@ class CampoSerializer(serializers.ModelSerializer):
             "text":    "texto",
             "group":   "string",
         }
-        tipo = attrs.get("tipo") or getattr(self.instance, "tipo", None)
-        esperado = matrix.get(clase_norm)
-        if esperado and tipo != esperado:
-            raise serializers.ValidationError({"tipo": f"tipo '{tipo}' no coincide con clase '{raw_clase}' (esperado '{esperado}')"})
-        
+        esperado = matrix.get(clase)
+        if esperado:
+            attrs["tipo"] = esperado
+
+        # 5) si viene 'grupo', que sea de clase 'group' y de la misma página
         grupo = attrs.get("grupo") or getattr(self.instance, "grupo", None)
         if grupo:
-            # el padre debe ser un campo de clase 'group'
             if (grupo.clase or "").strip().lower() != "group":
-                raise serializers.ValidationError({"grupo": "El campo 'grupo' debe apuntar a un campo de clase 'group'."})
+                raise serializers.ValidationError({"grupo": "El 'grupo' debe ser de clase 'group'."})
             pagina = attrs.get("pagina") or getattr(self.instance, "pagina", None)
-            if pagina and grupo.pagina_id != pagina.id_pagina:
+            if pagina and getattr(grupo, "pagina_id", None) != getattr(pagina, "id_pagina", None):
                 raise serializers.ValidationError({"grupo": "El 'grupo' debe pertenecer a la misma página."})
 
         return attrs
@@ -151,7 +146,7 @@ class FormularioActualSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = FormularioActualVersion
-        fields = ("formulario", "index_version", "publicada_en")  # no se usan tal cual
+        fields = ("formulario", "index_version", "publicada_en")
 
     def to_representation(self, obj):
         # Reusar la salida del FormularioSerializer (ya usa PaginaActualVersion)
