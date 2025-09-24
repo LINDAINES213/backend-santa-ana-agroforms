@@ -1,4 +1,6 @@
 venv/
+.venv/
+openssl/
 *.pyc
 .env
 .idea/
