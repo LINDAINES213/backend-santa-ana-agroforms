@@ -2,66 +2,114 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.db import transaction
 
+from .models import Formulario, FormularioIndexVersion, Formulario_Index_Version, Pagina
 
-from formularios.services import activar_version
-from .models import Formulario, FormularioIndexVersion
-
-
-# @receiver(post_save, sender=Formulario)
-# def crear_version_inicial(sender, instance, created, **kwargs):
-#     if created:
-#         v1 = FormularioIndexVersion.objects.create(formulario=instance)
-#         # activar versión inicial (aunque no tenga páginas todavía)
-#         activar_version(instance, v1)
+from .services import activar_version
 
 @receiver(post_save, sender=Formulario)
 def crear_y_activar_version_inicial(sender, instance: Formulario, created, **kwargs):
-    """
-    Al crear un Formulario: crea v1 y la deja activa.
-    """
     if created:
-        v1 = FormularioIndexVersion.objects.create(formulario=instance)
-        # Activa v1 para que las tablas *_Actual queden listas
-        activar_version(instance, v1)
+        # 1) crear v1 del formulario
+        v1 = FormularioIndexVersion.objects.create(formulario_id=instance)
 
+        def _despues_commit():
+            # 2) crear página inicial en v1
+            Pagina.objects.create(
+                index_version=v1,
+                formulario_id=instance,
+                secuencia=1,
+                nombre="General",
+                descripcion="",
+            )
+            # 3) (opcional) actualizar índices/punteros
+            activar_version(instance, v1)
+
+        # Ejecutar cuando la creación de v1 ya quedó confirmada
+        transaction.on_commit(_despues_commit)
 
 @receiver(post_save, sender=FormularioIndexVersion)
-def auto_activar_version_mas_reciente(sender, instance: FormularioIndexVersion, created, **kwargs):
+def _registrar_historial_al_crear_version(sender, instance: FormularioIndexVersion, created, **kwargs):
     """
-    Al crear CUALQUIER nueva versión del formulario, la activa automáticamente
-    si es la más reciente por fecha_creacion (normalmente lo será).
+    En cuanto se crea una nueva FormularioIndexVersion, guardamos UNA fila en el historial
+    (formularios_formularios_index_version) usando los nombres reales de columnas:
+      - id_index_version (PK 1:1 con la versión)
+      - id_formulario (FK al formulario)
     """
     if not created:
         return
 
-    form = instance.formulario
+    # Insertar en historial inmediatamente (si ya existiera, no duplica)
+    def _do():
+        Formulario_Index_Version.objects.get_or_create(
+            id_index_version=instance,                       # PK = versión
+            defaults={"id_formulario": instance.formulario_id},
+        )
 
-    # Obten la más reciente por fecha_creacion (desc)
-    newest = (FormularioIndexVersion.objects
-              .filter(formulario=form)
-              .order_by("-fecha_creacion")
-              .first())
+        # --- (OPCIONAL) actualizar puntero de versión activa si tienes esa tabla ---
+        try:
+            from django.apps import apps
+            FormularioIndex = apps.get_model("formularios", "FormularioIndex")
+        except Exception:
+            FormularioIndex = None
 
-    # Por sanidad: solo activar si la que acaba de crearse es efectivamente la más nueva
-    if newest and newest.id_index_version == instance.id_index_version:
-        # Activa y materializa PaginaIndexActual / PaginaCampoActual
-        activar_version(form, instance)
+        if FormularioIndex:
+            FormularioIndex.objects.update_or_create(
+                id_formulario=instance.formulario_id,
+                defaults={"id_index_version": instance},
+            )
 
-@receiver(post_save, sender=FormularioIndexVersion)
-def auto_activar_version_mas_reciente(sender, instance: FormularioIndexVersion, created, **kwargs):
-    if not created:
-        return
+    # Asegura que se ejecute cuando la transacción que creó la versión ya esté confirmada
+    transaction.on_commit(_do)
 
-    form = instance.formulario
 
-    def _activate():
-        # activar solo si sigue siendo la más reciente
-        newest = (FormularioIndexVersion.objects
-                  .filter(formulario=form)
-                  .order_by("-fecha_creacion")
-                  .first())
-        if newest and newest.id_index_version == instance.id_index_version:
-            activar_version(form, instance)
+# @receiver(post_save, sender=Formulario)
+# def crear_y_activar_version_inicial(sender, instance: Formulario, created, **kwargs):
+#     """
+#     Al crear un Formulario: crea v1 y la deja activa.
+#     """
+#     if created:
+#         v1 = FormularioIndexVersion.objects.create(formulario=instance)
+#         # Activa v1 para que las tablas *_Actual queden listas
+#         activar_version(instance, v1)
 
-    # ✅ activa al commit, cuando ya existen PaginaIndex y campos clonados
-    transaction.on_commit(_activate)
+
+# @receiver(post_save, sender=FormularioIndexVersion)
+# def auto_activar_version_mas_reciente(sender, instance: FormularioIndexVersion, created, **kwargs):
+#     """
+#     Al crear CUALQUIER nueva versión del formulario, la activa automáticamente
+#     si es la más reciente por fecha_creacion (normalmente lo será).
+#     """
+#     if not created:
+#         return
+
+#     form = instance.formulario
+
+#     # Obten la más reciente por fecha_creacion (desc)
+#     newest = (FormularioIndexVersion.objects
+#               .filter(formulario=form)
+#               .order_by("-fecha_creacion")
+#               .first())
+
+#     # Por sanidad: solo activar si la que acaba de crearse es efectivamente la más nueva
+#     if newest and newest.id_index_version == instance.id_index_version:
+#         # Activa y materializa PaginaIndexActual / PaginaCampoActual
+#         activar_version(form, instance)
+
+# @receiver(post_save, sender=FormularioIndexVersion)
+# def auto_activar_version_mas_reciente(sender, instance: FormularioIndexVersion, created, **kwargs):
+#     if not created:
+#         return
+
+#     form = instance.formulario
+
+#     def _activate():
+#         # activar solo si sigue siendo la más reciente
+#         newest = (FormularioIndexVersion.objects
+#                   .filter(formulario=form)
+#                   .order_by("-fecha_creacion")
+#                   .first())
+#         if newest and newest.id_index_version == instance.id_index_version:
+#             activar_version(form, instance)
+
+#     # ✅ activa al commit, cuando ya existen PaginaIndex y campos clonados
+#     transaction.on_commit(_activate)
