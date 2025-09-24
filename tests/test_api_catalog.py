@@ -1,6 +1,6 @@
 from formularios.models import ClaseCampo
 
-def test_catalogos_clases_lista(api_client, db):
+def test_catalogs_classes_list(api_client, db):
     ClaseCampo.objects.create(clase='texto', schema={"max_length": ["number", None]})
     ClaseCampo.objects.create(clase='numero', schema={"min": ["number", None]})
     r = api_client.get('/api/catalogos/clases-campo/')

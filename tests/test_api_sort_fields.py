@@ -8,7 +8,7 @@ def _setup_page_with_fields(formulario):
     c3 = Campo.objects.create(pagina=p, tipo='text', clase='base', nombre_campo='c3', etiqueta='C3', ayuda='', config={}, requerido=False, sequence=3)
     return p, (c1, c2, c3)
 
-def test_reordenar_updates_sequences(api_client, formulario):
+def test_reorder_updates_sequences(api_client, formulario):
     p, (c1, c2, c3) = _setup_page_with_fields(formulario)
     r = api_client.post('/api/campos/reordenar/', {
         "items": [

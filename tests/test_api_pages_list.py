@@ -22,7 +22,7 @@ def test_paginas_list_contains_created(api_client, formulario, version):
     r = api_client.get('/api/paginas/')
     assert any(p.get('nombre') == 'P-Y' for p in r.json())
 
-def test_pagina_retrieve_404(api_client):
+def test_page_retrieve_404(api_client):
     r = api_client.get('/api/paginas/00000000-0000-0000-0000-000000000000/')
     assert r.status_code in (404, 400)
 
