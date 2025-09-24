@@ -16,13 +16,16 @@ def test_formulario_serializer_category_nombre(db):
 
 def test_pagina_serializer_includes_form_id(db):
     cat = Categoria.objects.create(nombre='Cat', descripcion='')
-    f = Formulario.objects.create(categoria=cat, nombre='F1', descripcion='', permitir_fotos=False, permitir_gps=False,
-                                  disponible_desde_fecha='2024-01-01', disponible_hasta_fecha='2024-12-31',
-                                  estado='Activa', forma_envio='En Linea', es_publico=False, auto_envio=False)
+    f = Formulario.objects.create(
+        categoria=cat, nombre='F1', descripcion='',
+        permitir_fotos=False, permitir_gps=False,
+        disponible_desde_fecha='2024-01-01', disponible_hasta_fecha='2024-12-31',
+        estado='Activa', forma_envio='En Linea', es_publico=False, auto_envio=False
+    )
     ver = FormularioIndexVersion.objects.create(formulario=f)
     p = Pagina.objects.create(index_version=ver, formulario=f, secuencia=1, nombre='P', descripcion='')
     s = PaginaSerializer(instance=p)
-    assert s.data['formulario_id'] == str(f.id)
+    assert str(s.data['formulario']) == str(f.id)
 
 def test_usuario_serializer_role_name(db):
     rol = Rol.objects.create(nombre='admin', descripcion='')
@@ -32,11 +35,14 @@ def test_usuario_serializer_role_name(db):
 
 def test_pagina_serializer_has_expected_fields(db):
     cat = Categoria.objects.create(nombre='Cat', descripcion='')
-    f = Formulario.objects.create(categoria=cat, nombre='F2', descripcion='', permitir_fotos=False, permitir_gps=False,
-                                  disponible_desde_fecha='2024-01-01', disponible_hasta_fecha='2024-12-31',
-                                  estado='Activa', forma_envio='En Linea', es_publico=False, auto_envio=False)
+    f = Formulario.objects.create(
+        categoria=cat, nombre='F2', descripcion='',
+        permitir_fotos=False, permitir_gps=False,
+        disponible_desde_fecha='2024-01-01', disponible_hasta_fecha='2024-12-31',
+        estado='Activa', forma_envio='En Linea', es_publico=False, auto_envio=False
+    )
     ver = FormularioIndexVersion.objects.create(formulario=f)
     p = Pagina.objects.create(index_version=ver, formulario=f, secuencia=9, nombre='P9', descripcion='x')
     s = PaginaSerializer(instance=p)
     assert s.data['nombre'] == 'P9'
-    assert 'id' in s.data
+    assert 'id_pagina' in s.data
