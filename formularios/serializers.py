@@ -31,6 +31,31 @@ class CategoriaSerializer(serializers.ModelSerializer):
 #         qs = obj.campos.all().order_by("sequence","id_campo")
 #         return CampoSerializer(qs, many=True).data
 
+# serializers.py
+class FormularioListSerializer(serializers.ModelSerializer):
+    categoria_nombre = serializers.SerializerMethodField()
+    class Meta:
+        model = Formulario
+        fields = (
+            "id",
+            "categoria",            # FK (id de Categoria)
+            "categoria_nombre",   # nombre de la categoría (read-only)
+            "nombre",
+            "descripcion",
+            "permitir_fotos",
+            "permitir_gps",
+            "disponible_desde_fecha",
+            "disponible_hasta_fecha",
+            "estado",
+            "forma_envio",
+            "es_publico",
+            "auto_envio",
+        )
+
+    def get_categoria_nombre(self, obj):
+        return obj.categoria.nombre if obj.categoria else None
+
+
 class PaginaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Pagina

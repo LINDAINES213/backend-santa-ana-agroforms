@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from django.db import models, connection
 from .models import Campo, Categoria, Formulario, FormularioIndexVersion, Pagina, Rol, Usuario
 from django.shortcuts import get_object_or_404
-from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, RolCreateUpdateSerializer, RolSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, UsuarioReplaceRolesSerializer
+from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, RolCreateUpdateSerializer, RolSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, UsuarioReplaceRolesSerializer
 from django.http import HttpResponse
 
 def home(request):
@@ -45,6 +45,37 @@ class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
         ser.is_valid(raise_exception=True)
         out = crear_campo_en_pagina(id32, ser.validated_data)
         return Response(out, status=status.HTTP_201_CREATED)
+    
+class FormularioListViewSet(viewsets.ModelViewSet):
+    lookup_field = "id"
+
+    def get_queryset(self):
+        # Trae solo columnas necesarias para el listado; el detail usará el serializer completo
+        qs = (
+            Formulario.objects
+            .select_related("categoria")
+            .only(
+                "id",
+                "categoria_id",
+                "nombre",
+                "descripcion",
+                "permitir_fotos",
+                "permitir_gps",
+                "disponible_desde_fecha",
+                "disponible_hasta_fecha",
+                "estado",
+                "forma_envio",
+                "es_publico",
+                "auto_envio",
+            )
+        )
+        return qs
+
+    def get_serializer_class(self):
+        # Usa el serializer liviano en list; el completo en retrieve/otros
+        if self.action == "list":
+            return FormularioListSerializer
+        return FormularioSerializer
 
 class FormularioViewSet(viewsets.ModelViewSet):
     queryset = Formulario.objects.all()
