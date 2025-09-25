@@ -1,9 +1,9 @@
-from .services import _uuid32_no_dashes, activar_version, crear_campo_en_pagina, crear_campo_y_versionar_pagina
+from .services import _uuid32_no_dashes, activar_version, crear_campo_en_pagina, crear_campo_y_versionar_pagina, duplicar_formulario_orm
 from rest_framework import status, filters, viewsets
 from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
-from django.db import models
+from django.db import models, connection
 from .models import Campo, Categoria, Formulario, FormularioIndexVersion, Pagina, Rol, Usuario
 from django.shortcuts import get_object_or_404
 from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, RolCreateUpdateSerializer, RolSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, UsuarioReplaceRolesSerializer
@@ -49,10 +49,112 @@ class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
 class FormularioViewSet(viewsets.ModelViewSet):
     queryset = Formulario.objects.all()
     serializer_class = FormularioSerializer
+    lookup_field = "id"
+
+    @action(detail=True, methods=["post"], url_path="duplicar")
+    def duplicar(self, request, id=None):
+        try:
+            out = duplicar_formulario_orm(id)
+            return Response(out, status=status.HTTP_201_CREATED)
+        except Formulario.DoesNotExist:
+            return Response({"detail": "Formulario no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"detail": f"Fallo duplicando: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        """
+        DELETE /api/formularios/{id}/
+        Deletes a complete form with all its related data
+        """
+        try:
+            formulario = self.get_object()
+            formulario_id = str(formulario.id)
+            
+            # Since models are unmanaged, we need to manually handle cascading deletes
+            self._delete_formulario_cascade(formulario_id)
+            
+            return Response({
+                "detail": f"Formulario {formulario_id} eliminado exitosamente",
+                "deleted_id": formulario_id
+            }, status=status.HTTP_204_NO_CONTENT)
+            
+        except Formulario.DoesNotExist:
+            return Response(
+                {"detail": "Formulario no encontrado."}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error eliminando formulario: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _delete_formulario_cascade(self, formulario_id: str):
+        """
+        Manually handle cascading deletes for unmanaged models
+        Order is important to respect foreign key constraints
+        """
+        with connection.cursor() as cursor:
+            # Convert UUID to 32-char format for database queries
+            formulario_id_32 = formulario_id.replace('-', '').lower()
+            
+            # 1. Delete campo-pagina relationships first (PaginaCampo)
+            cursor.execute("""
+                DELETE pc FROM formularios_pagina_campo pc
+                INNER JOIN formularios_pagina_version pv ON pc.id_pagina_version = pv.id_pagina_version  
+                INNER JOIN formularios_pagina p ON pv.id_pagina = p.id_pagina
+                WHERE p.formulario_id = %s
+            """, [formulario_id_32])
+            
+            # 2. Delete page versions (PaginaVersion)
+            cursor.execute("""
+                DELETE pv FROM formularios_pagina_version pv
+                INNER JOIN formularios_pagina p ON pv.id_pagina = p.id_pagina
+                WHERE p.formulario_id = %s
+            """, [formulario_id_32])
+            
+            # 3. Delete page index version pointers (Pagina_Index_Version)
+            cursor.execute("""
+                DELETE piv FROM formularios_pagina_index_version piv
+                INNER JOIN formularios_pagina p ON piv.id_pagina = p.id_pagina
+                WHERE p.formulario_id = %s
+            """, [formulario_id_32])
+            
+            # 4. Delete pages (Pagina)
+            cursor.execute("""
+                DELETE FROM formularios_pagina 
+                WHERE formulario_id = %s
+            """, [formulario_id_32])
+            
+            # 5. Delete form index version history (Formulario_Index_Version)
+            cursor.execute("""
+                DELETE fiv FROM formularios_formularios_index_version fiv
+                INNER JOIN formularios_formularioindexversion fv ON fiv.id_index_version = fv.id_index_version
+                WHERE fv.formulario_id = %s
+            """, [formulario_id_32])
+            
+            # 6. Delete form versions (FormularioIndexVersion)
+            cursor.execute("""
+                DELETE FROM formularios_formularioindexversion 
+                WHERE formulario_id = %s
+            """, [formulario_id_32])
+            
+            # 7. Delete role-form relationships (RolFormulario)
+            cursor.execute("""
+                DELETE FROM formularios_rol_formulario 
+                WHERE id_formulario = %s
+            """, [formulario_id_32])
+            
+            # 8. Finally, delete the form itself (Formulario)
+            cursor.execute("""
+                DELETE FROM formularios_formulario 
+                WHERE id = %s
+            """, [formulario_id_32])
 
     @action(detail=True, methods=['post'], url_path='agregar-pagina')
     @transaction.atomic
-    def agregar_pagina(self, request, pk=None):
+    def agregar_pagina(self, request, id=None):
         formulario = self.get_object()
         data = request.data
 

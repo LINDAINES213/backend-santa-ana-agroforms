@@ -329,3 +329,93 @@ def hash_password(plain: str) -> str:
 
 def verify_password(hash_phc: str, plain: str) -> bool:
     return verify_secret(hash_phc.encode("utf-8"), plain.encode("utf-8"), Type.ID)
+
+@transaction.atomic
+def duplicar_formulario_orm(formulario_id) -> dict:
+    # 1) origen
+    f_src: Formulario = Formulario.objects.get(pk=formulario_id)
+
+    # 2) crea clon
+    f_dst = Formulario.objects.create(
+        id=uuid.uuid4(),
+        categoria=f_src.categoria,
+        nombre=f"{f_src.nombre}_Copia",
+        descripcion=f_src.descripcion,
+        permitir_fotos=f_src.permitir_fotos,
+        permitir_gps=f_src.permitir_gps,
+        disponible_desde_fecha=f_src.disponible_desde_fecha,
+        disponible_hasta_fecha=f_src.disponible_hasta_fecha,
+        estado=f_src.estado,
+        forma_envio=f_src.forma_envio,
+        es_publico=f_src.es_publico,
+        auto_envio=f_src.auto_envio,
+    )
+
+    # 3) última versión del original
+    ver_src = (FormularioIndexVersion.objects
+               .filter(formulario_id=f_src)
+               .order_by("-fecha_creacion")
+               .first())
+
+    # si no hay versiones/páginas, devolvemos el clon vacío
+    if not ver_src:
+        return {"formulario_id": str(f_dst.id), "paginas": []}
+
+    # 4) nueva versión para el clon
+    ver_dst = FormularioIndexVersion.objects.create(
+        id_index_version=uuid.uuid4(),
+        formulario_id=f_dst
+    )
+
+    # 5) clonar páginas de esa versión
+    paginas_src = (Pagina.objects
+                   .filter(index_version=ver_src, formulario_id=f_src)
+                   .order_by("secuencia"))
+
+    result_paginas = []
+
+    for p in paginas_src:
+        # 5.1 nueva página en el clon
+        p_new = Pagina.objects.create(
+            id_pagina=uuid.uuid4(),
+            index_version=ver_dst,
+            formulario_id=f_dst,
+            secuencia=p.secuencia,
+            nombre=p.nombre,
+            descripcion=p.descripcion,
+        )
+        result_paginas.append({"old": str(p.id_pagina), "new": str(p_new.id_pagina)})
+
+        # 5.2 última versión de la página original
+        p_src_32 = _uuid32_no_dashes(str(p.id_pagina))
+        pv_src = (PaginaVersion.objects
+                  .filter(id_pagina=p_src_32)
+                  .order_by("-fecha_creacion")
+                  .first())
+
+        # 5.3 crear versión para la nueva página
+        pv_dst = PaginaVersion.objects.create(
+            id_pagina_version=_uuid32_no_dashes(str(uuid.uuid4())),
+            fecha_creacion=pv_src.fecha_creacion if pv_src else timezone.now(),
+            id_pagina=_uuid32_no_dashes(str(p_new.id_pagina)),
+        )
+
+        # 5.4 copiar enlaces de campos (solo ORM)
+        if pv_src:
+            links = list(PaginaCampo.objects
+                         .select_related("id_campo")
+                         .filter(id_pagina_version=pv_src)
+                         .order_by("sequence"))
+
+            nuevos = [
+                PaginaCampo(
+                    id_campo=lnk.id_campo,                # FK a Campo (Char(32) pk)
+                    id_pagina_version=pv_dst,             # FK a PaginaVersion
+                    sequence=lnk.sequence,
+                )
+                for lnk in links
+            ]
+            if nuevos:
+                PaginaCampo.objects.bulk_create(nuevos)
+
+    return {"formulario_id": str(f_dst.id), "paginas": result_paginas}
