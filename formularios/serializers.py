@@ -1,10 +1,11 @@
-from .services import _uuid32_no_dashes
+from .services import _uuid32_no_dashes, hash_password, uuid32
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Campo, Categoria, Formulario, FormularioIndexVersion, Pagina, PaginaCampo, PaginaVersion
+from .models import Campo, Categoria, Formulario, FormularioIndexVersion, Pagina, PaginaCampo, PaginaVersion, Rol, RolUser, Usuario
 # from .validators import validate_config_against_schema
-from django.utils.text import slugify
+from django.db import connection
+from rest_framework.validators import UniqueValidator
 import uuid
 
 
@@ -109,134 +110,128 @@ class FormularioSerializer(serializers.ModelSerializer):
             return []
         qs = Pagina.objects.filter(index_version=last_version).order_by("secuencia")
         return PaginaConCamposSerializer(qs, many=True, context=self.context).data
+
+class RolLiteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Rol
+        fields = ("id", "nombre", "descripcion")
+
+class UsuarioDetalleSerializer(serializers.ModelSerializer):
+    roles = RolLiteSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Usuario
+        fields = ("nombre_usuario", "nombre", "correo", "activo", "roles")
+
+class UsuarioCreateSerializer(serializers.ModelSerializer):
+    contrasena = serializers.CharField(write_only=True, min_length=8, style={"input_type": "password"})
+    roles = serializers.PrimaryKeyRelatedField(
+        many=True,
+        required=False,
+        queryset=Rol.objects.all(),
+        help_text="Selecciona uno o varios roles (Ctrl/Cmd + click)."
+    )
+
+    class Meta:
+        model = Usuario
+        fields = ("nombre_usuario", "nombre", "correo", "contrasena", "activo", "roles")
+
+    def validate(self, attrs):
+        if Usuario.objects.filter(correo=attrs["correo"]).exists():
+            raise serializers.ValidationError({"correo": "Ya existe un usuario con este correo."})
+        if Usuario.objects.filter(pk=attrs["nombre_usuario"]).exists():
+            raise serializers.ValidationError({"nombre_usuario": "Ya existe un usuario con este nombre de usuario."})
+        return attrs
+
+    def create(self, validated):
+        roles_objs = validated.pop("roles", [])
+        plain = validated.pop("contrasena")
+        validated["contrasena"] = hash_password(plain)
+
+        # crea usuario
+        user = Usuario.objects.create(**validated)
+
+        # INSERTS a la tabla puente con SQL crudo (evita la columna 'id')
+        if roles_objs:
+            # evitar duplicados actuales
+            existentes = set(
+                RolUser.objects
+                .filter(nombre_de_usuario=user, id_rol__in=[r.id for r in roles_objs])
+                .values_list("id_rol_id", flat=True)
+            )
+            # Normalízalos por si vienen con mayúsculas
+            existentes = { (e or "").replace("-", "").lower() for e in existentes }
+
+            # filas a insertar (id_rol debe ir como 32 chars)
+            filas = [(uuid32(r.id), str(user.nombre_usuario))
+                    for r in roles_objs if uuid32(r.id) not in existentes]
+
+            if filas:
+                with connection.cursor() as cur:
+                    cur.executemany(
+                        "INSERT INTO formularios_rol_user (id_rol, nombre_usuario) VALUES (%s, %s)",
+                        filas
+                    )
+                return user
+
+class UsuarioReplaceRolesSerializer(serializers.Serializer):
+    roles = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Rol.objects.all(),
+        required=True,
+        help_text="Selecciona los roles finales del usuario."
+    )
+
+    def update(self, user: Usuario, validated):
+        new_ids = {r.id for r in validated["roles"]}
+        cur_ids = set(
+            Rol.objects.filter(roluser__nombre_de_usuario=user)
+            .values_list("id", flat=True)
+        )
+        # normaliza a 32
+        cur_ids = { uuid32(x) for x in cur_ids }
+
+        new_ids = { uuid32(r.id) for r in validated["roles"] }
+
+        to_add = new_ids - cur_ids
+        to_del = cur_ids - new_ids
+
+        if to_del:
+            # OJO: si id_rol en la tabla puente está en 32 chars, hay que pasar 32
+            RolUser.objects.filter(
+                nombre_de_usuario=user,
+                id_rol_id__in=list(to_del)
+            ).delete()
+
+        if to_add:
+            filas = [(rid, str(user.nombre_usuario)) for rid in to_add]  # rid ya viene 32
+            with connection.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO formularios_rol_user (id_rol, nombre_usuario) VALUES (%s, %s)",
+                    filas
+                )
     
-    # def get_paginas(self, obj):
-    #     activos = (PaginaActualVersion.objects
-    #                .filter(formulario=obj)
-    #                .select_related("pagina")
-    #                )
-    #     if activos.exists():
-    #         paginas = [a.pagina for a in activos]
-    #         from .serializers import PaginaConCamposSerializer
-    #         return PaginaConCamposSerializer(paginas, many=True, context=self.context).data
+class RolSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Rol
+        fields = ("id", "nombre", "descripcion")
 
-    #     last_version = (FormularioIndexVersion.objects
-    #                     .filter(formulario=obj).order_by("-fecha_creacion").first())
-    #     if not last_version:
-    #         return []
-    #     qs = Pagina.objects.filter(index_version=last_version).order_by("secuencia")
-    #     from .serializers import PaginaConCamposSerializer
-    #     return PaginaConCamposSerializer(qs, many=True, context=self.context).data
 
-# import logging
+class RolCreateUpdateSerializer(serializers.ModelSerializer):
+    # unicidad case-insensitive para evitar “Admin” vs “admin”
+    nombre = serializers.CharField(
+        max_length=50,
+        validators=[UniqueValidator(queryset=Rol.objects.all(), lookup="iexact")]
+    )
 
-# logger = logging.getLogger(__name__)
+    class Meta:
+        model = Rol
+        fields = ("id", "nombre", "descripcion")
+        read_only_fields = ("id",)
 
-# class CampoSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Campo
-#         fields = "__all__"
-#         read_only_fields = ("id_campo","creado","actualizado","pagina")
-#         extra_kwargs = {
-#             "tipo": {"required": False, "allow_blank": True},
-#         }
-
-#     def validate(self, attrs):
-#         raw = (attrs.get("clase") or getattr(self.instance, "clase", "") or "")
-#         clase = raw.strip().lower()
-
-#         # 1) clase válida en catálogo
-#         row = next((c for c in ClaseCampo.objects.all()
-#                     if (c.clase or "").strip().lower() == clase), None)
-#         if not row:
-#             disponibles = [ (c.clase or "").strip() for c in ClaseCampo.objects.all() ]
-#             raise serializers.ValidationError({"clase": f"Clase no registrada. Usa: {', '.join(disponibles)}"})
-
-#         # 2) autogenerar IDs en config si aplica
-#         cfg = attrs.get("config") or {}
-#         if clase == "list" and not cfg.get("id_list"):
-#             base = attrs.get("nombre_campo") or "lista"
-#             cfg["id_list"] = f"{slugify(base) or 'lista'}-{uuid.uuid4().hex[:6]}"
-#             attrs["config"] = cfg
-#         if clase == "group" and not cfg.get("id_group"):
-#             base = attrs.get("nombre_campo") or "grupo"
-#             cfg["id_group"] = f"{slugify(base) or 'grupo'}-{uuid.uuid4().hex[:6]}"
-#             attrs["config"] = cfg
-
-#         # 3) validar config ↔ schema
-#         schema = row.schema if isinstance(row.schema, dict) else None
-#         errs = validate_config_against_schema(cfg, schema)
-#         if errs:
-#             raise serializers.ValidationError({"config": errs})
-
-#         # 4) AUTORRELLENO de 'tipo' por 'clase'
-#         matrix = {
-#             "number":  "numerico",
-#             "boolean": "booleano",
-#             "date":    "date",
-#             "hour":    "hour",
-#             "img":     "texto",
-#             "dataset": "texto",
-#             "list":    "texto",
-#             "calc":    "numerico",
-#             "string":  "texto",
-#             "text":    "texto",
-#             "group":   "string",
-#         }
-#         esperado = matrix.get(clase)
-#         if esperado:
-#             attrs["tipo"] = esperado
-
-#         # 5) si viene 'grupo', que sea de clase 'group' y de la misma página
-#         grupo = attrs.get("grupo") or getattr(self.instance, "grupo", None)
-#         if grupo:
-#             if (grupo.clase or "").strip().lower() != "group":
-#                 raise serializers.ValidationError({"grupo": "El 'grupo' debe ser de clase 'group'."})
-#             pagina = attrs.get("pagina") or getattr(self.instance, "pagina", None)
-#             if pagina and getattr(grupo, "pagina_id", None) != getattr(pagina, "id_pagina", None):
-#                 raise serializers.ValidationError({"grupo": "El 'grupo' debe pertenecer a la misma página."})
-
-#         return attrs
-
-# class FormularioActualSerializer(serializers.ModelSerializer):
-#     """
-#     Renderiza un formulario usando SIEMPRE la versión ACTUAL:
-#     delega en FormularioSerializer (que ya lee PaginaActualVersion)
-#     pero añade metadatos de la versión activa.
-#     """
-#     class Meta:
-#         model = FormularioActualVersion
-#         fields = ("formulario", "index_version", "publicada_en")
-
-#     def to_representation(self, obj):
-#         # Reusar la salida del FormularioSerializer (ya usa PaginaActualVersion)
-#         data = FormularioSerializer(obj.formulario, context=self.context).data
-#         # extra útil: id de la versión activa + timestamp de publicación
-#         data["version_activa_id"] = str(obj.index_version_id)
-#         data["publicada_en"] = obj.publicada_en.isoformat() if obj.publicada_en else None
-#         return data
-    
-# class PaginaActualSerializer(serializers.Serializer):
-#     """
-#     Representa una página VIGENTE a partir de PaginaActualVersion.
-#     Devuelve exactamente el payload de PaginaConCamposSerializer de la Pagina asociada,
-#     más metadatos útiles (orden, formulario, etc).
-#     """
-#     def to_representation(self, obj: PaginaActualVersion):
-#         pagina = obj.pagina
-#         data = PaginaConCamposSerializer(pagina, context=self.context).data
-#         # data["orden_vigente"] = obj.orden
-#         data["formulario_id"] = str(obj.formulario_id)
-#         return data
-    
-# class UsuarioSerializer(serializers.ModelSerializer):
-#     rol_nombre = serializers.CharField(source="rol.nombre", read_only=True)
-
-#     class Meta:
-#         model = Usuario
-#         fields = "__all__"
-
-# class RolSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Rol
-#         fields = "__all__"
+class CampoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Campo
+        fields = ("id_campo", "tipo", "clase", "nombre_campo",
+                  "etiqueta", "ayuda", "config", "requerido")
+   

@@ -27,18 +27,24 @@ class Rol(models.Model):
         db_table = "formularios_rol"  
 
 class Usuario(models.Model):
+    nombre_usuario = models.CharField(max_length=50, primary_key=True, db_column="nombre_usuario")
     nombre = models.CharField(max_length=100)
     correo = models.EmailField(unique=True)
     contrasena = models.CharField(max_length=128)
-    nombre_usuario = models.CharField(max_length=50, unique=True)
     activo = models.BooleanField(default=True)
+
+    roles = models.ManyToManyField(
+        "formularios.Rol",
+        through="formularios.RolUser",
+        related_name="usuarios",
+    )
+
     class Meta:
         managed = False
-        db_table = "formularios_usuario"  
+        db_table = "formularios_usuario"
+        ordering = ("nombre",)
 
-    def __str__(self):
-        estado = "Activo" if self.activo else "Inactivo"
-        return f"{self.nombre} ({self.rol.nombre}) - {estado}"
+
 
 
 class Formulario(models.Model):
@@ -82,13 +88,15 @@ class RolFormulario(models.Model):
         managed = False
         db_table = "formularios_rol_formulario"
 
-class RolUser(models.Model):
-    id_rol = models.ForeignKey(Rol, on_delete=models.CASCADE)
-    nombre_de_usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE)
 
+class RolUser(models.Model):
+    id_rol = models.ForeignKey("formularios.Rol", on_delete=models.CASCADE, db_column="id_rol")
+    nombre_de_usuario = models.ForeignKey("formularios.Usuario", on_delete=models.CASCADE,
+                                          db_column="nombre_usuario", related_name="roles_enlace")
     class Meta:
         managed = False
-        db_table = "formularios_rol_formulario"  
+        db_table = "formularios_rol_user"
+        unique_together = (("id_rol", "nombre_de_usuario"),)
 
 class FormularioIndexVersion(models.Model):
     id_index_version = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
