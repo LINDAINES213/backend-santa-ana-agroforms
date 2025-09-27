@@ -64,7 +64,7 @@ class PaginaSerializer(serializers.ModelSerializer):
 
 class CrearCampoEnPaginaSerializer(serializers.Serializer):
     clase = serializers.CharField()
-    nombre_campo = serializers.RegexField(r"^[a-z0-9_]+$", max_length=64)
+    nombre_campo = serializers.RegexField(r"^[a-zA-Z0-9_]+$", max_length=64)
     etiqueta = serializers.CharField(max_length=100)
     ayuda = serializers.CharField(max_length=255, required=False, allow_null=True, allow_blank=True)
     requerido = serializers.BooleanField(required=False)
