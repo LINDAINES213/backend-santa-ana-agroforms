@@ -22,6 +22,7 @@ from .models import (
     PaginaCampo,
     Pagina_Index_Version
 )
+from formularios import models
 
 def _uuid32_no_dashes(s: str) -> str:
     s = s.strip().lower()
@@ -113,8 +114,7 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
     Crea Campo (tipo por clase) y publica nueva versión:
       - nueva FormularioIndexVersion
       - nueva PaginaVersion (fecha)
-      - clona PaginaCampo de la última versión
-      - inserta el nuevo Campo en PaginaCampo (al final o sequence pedido)
+      - NO clona campos existentes, solo agrega el nuevo
       - actualiza punteros Pagina_Index_Version a la nueva index_version
     """
     clase = (data.get("clase") or "").strip().lower()
@@ -152,28 +152,17 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
     prev_pv = _ultima_pagina_version(pagina)
     nueva_pv = PaginaVersion.objects.create(id_pagina=pagina)
 
-    # 3) Clonar mapeo campo↔pagina_version de la última, si existe
+    # 3) **CAMBIO CRÍTICO**: NO clonar campos existentes
+    # Solo calcular la secuencia basada en los campos existentes
     max_seq = 0
     if prev_pv:
-        rows = list(
-            PaginaCampo.objects
-            .filter(id_pagina_version=prev_pv)
-            .order_by("sequence")
-            .values("id_campo", "sequence")
-        )
-        if rows:
-            objs = [
-                PaginaCampo(
-                    id_campo_id=row["id_campo"],
-                    id_pagina_version=nueva_pv,
-                    sequence=row["sequence"],
-                )
-                for row in rows
-            ]
-            PaginaCampo.objects.bulk_create(objs)
-            max_seq = rows[-1]["sequence"] or 0
+        # Solo obtener el número máximo de secuencia, NO clonar los campos
+        max_seq_result = (PaginaCampo.objects
+                         .filter(id_pagina_version=prev_pv)
+                         .aggregate(max_seq=models.Max('sequence')))
+        max_seq = max_seq_result.get('max_seq') or 0
 
-    # 4) Insertar el NUEVO campo en la nueva PaginaVersion
+    # 4) Insertar SOLO el NUEVO campo en la nueva PaginaVersion
     sequence = data.get("sequence")
     try:
         sequence = int(sequence) if sequence is not None else None

@@ -4,10 +4,12 @@ from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
 from django.db import models, connection
-from .models import Campo, Categoria, Formulario, FormularioIndexVersion, Pagina, Rol, Usuario
+from .models import Campo, Categoria, Formulario, FormularioIndexVersion, Pagina, PaginaVersion, Rol, Usuario
 from django.shortcuts import get_object_or_404
 from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, RolCreateUpdateSerializer, RolSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, UsuarioReplaceRolesSerializer
 from django.http import HttpResponse
+from django.utils import timezone
+import uuid
 
 def home(request):
     return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
@@ -194,9 +196,9 @@ class FormularioViewSet(viewsets.ModelViewSet):
 
         # Última versión existente por fecha (si no hay, creamos v1)
         ultima_version = (FormularioIndexVersion.objects
-                  .filter(formulario_id=formulario)   # <-- FK correcto
-                  .order_by('-fecha_creacion')
-                  .first())
+                .filter(formulario_id=formulario)
+                .order_by('-fecha_creacion')
+                .first())
 
         if ultima_version is None:
             ultima_version = FormularioIndexVersion.objects.create(formulario_id=formulario)
@@ -205,22 +207,65 @@ class FormularioViewSet(viewsets.ModelViewSet):
 
         activar_version(formulario=formulario, nueva_version=version_destino)
 
-        # Si se solicita "bump", creamos una nueva versión y clonamos SOLO páginas
+        # Si se solicita "bump", creamos una nueva versión y clonamos páginas CON sus campos
         if bump:
             version_destino = FormularioIndexVersion.objects.create(formulario_id=formulario)
 
-            # Clonar TODAS las páginas de la última versión hacia la nueva (sin campos por ahora)
+            # Clonar TODAS las páginas de la última versión hacia la nueva CON sus campos
             paginas_src = (Pagina.objects
-                           .filter(index_version=ultima_version)
-                           .order_by("secuencia"))
+                        .filter(index_version=ultima_version)
+                        .order_by("secuencia"))
+            
             for p in paginas_src:
-                Pagina.objects.create(
+                # 1) Crear la nueva página
+                nueva_pagina = Pagina.objects.create(
                     index_version=version_destino,
-                    formulario_id=formulario,   # <- OJO: es formulario_id
+                    formulario_id=formulario,
                     secuencia=p.secuencia,
                     nombre=p.nombre,
                     descripcion=p.descripcion,
                 )
+                
+                # 2) Clonar los campos de la página original
+                # Obtener la última versión de la página original
+                id_pagina_32 = _uuid32_no_dashes(str(p.id_pagina))
+                pv_src = (PaginaVersion.objects
+                        .filter(id_pagina=id_pagina_32)
+                        .order_by("-fecha_creacion")
+                        .first())
+                
+                if pv_src:
+                    # Crear nueva versión para la página clonada
+                    pv_dst = PaginaVersion.objects.create(
+                        id_pagina_version=_uuid32_no_dashes(str(uuid.uuid4())),
+                        fecha_creacion=timezone.now(),
+                        id_pagina=_uuid32_no_dashes(str(nueva_pagina.id_pagina)),
+                    )
+                    
+                    # Copiar enlaces de campos de la página original
+                    from .models import PaginaCampo
+                    links = list(PaginaCampo.objects
+                                .select_related("id_campo")
+                                .filter(id_pagina_version=pv_src)
+                                .order_by("sequence"))
+
+                    if links:
+                        nuevos_links = [
+                            PaginaCampo(
+                                id_campo=link.id_campo,
+                                id_pagina_version=pv_dst,
+                                sequence=link.sequence,
+                            )
+                            for link in links
+                        ]
+                        PaginaCampo.objects.bulk_create(nuevos_links)
+                        
+                    # Actualizar puntero de la nueva página
+                    from .models import Pagina_Index_Version
+                    Pagina_Index_Version.objects.update_or_create(
+                        id_pagina=nueva_pagina,
+                        defaults={"id_index_version": version_destino},
+                    )
 
         # Calcular secuencia por defecto si no viene
         if "secuencia" in data and str(data.get("secuencia")).strip() not in ("", "0", "None"):
@@ -235,7 +280,7 @@ class FormularioViewSet(viewsets.ModelViewSet):
         # Crear la nueva página en la versión destino
         nueva_pagina = Pagina.objects.create(
             index_version=version_destino,
-            formulario_id=formulario,        # <- OJO: es formulario_id
+            formulario_id=formulario,
             secuencia=secuencia,
             nombre=data.get('nombre', 'Nueva página'),
             descripcion=data.get('descripcion', ''),
