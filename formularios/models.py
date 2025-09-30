@@ -1,5 +1,9 @@
 from django.db import models
 import uuid
+
+from formularios.auth_models import UsuarioManager
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+
 try:
     from django.db.models import JSONField  # Django 3.1+
 except Exception:
@@ -14,7 +18,7 @@ class Categoria(models.Model):
         return self.nombre
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = 'formularios_categoria'
 
 class Rol(models.Model):
@@ -23,29 +27,86 @@ class Rol(models.Model):
     descripcion = models.TextField(blank=True)
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_rol"  
 
-class Usuario(models.Model):
+# class Usuario(models.Model):
+#     nombre_usuario = models.CharField(max_length=50, primary_key=True, db_column="nombre_usuario")
+#     nombre = models.CharField(max_length=100)
+#     correo = models.EmailField(unique=True)
+#     contrasena = models.CharField(max_length=128)
+#     activo = models.BooleanField(default=True)
+
+#     roles = models.ManyToManyField(
+#         "formularios.Rol",
+#         through="formularios.RolUser",
+#         related_name="usuarios",
+#     )
+
+#     class Meta:
+#         # managed = False
+#         db_table = "formularios_usuario"
+#         ordering = ("nombre",)
+
+
+class Usuario(AbstractBaseUser, PermissionsMixin):
     nombre_usuario = models.CharField(max_length=50, primary_key=True, db_column="nombre_usuario")
     nombre = models.CharField(max_length=100)
     correo = models.EmailField(unique=True)
-    contrasena = models.CharField(max_length=128)
+    password = models.CharField(max_length=128)
     activo = models.BooleanField(default=True)
+    acceso_web = models.BooleanField(default=False)
+    is_staff = models.BooleanField(default=False)
+    is_superuser = models.BooleanField(default=False)
+
 
     roles = models.ManyToManyField(
-        "formularios.Rol",
-        through="formularios.RolUser",
+        "Rol",
+        through="RolUser",
         related_name="usuarios",
     )
 
+    # Agregar estos campos para evitar conflictos
+    groups = models.ManyToManyField(
+        'auth.Group',
+        verbose_name='groups',
+        blank=True,
+        related_name='formularios_usuarios',
+        related_query_name='formularios_usuario',
+    )
+    user_permissions = models.ManyToManyField(
+        'auth.Permission',
+        verbose_name='user permissions',
+        blank=True,
+        related_name='formularios_usuarios',
+        related_query_name='formularios_usuario',
+    )
+
+    objects = UsuarioManager()
+
+    USERNAME_FIELD = 'nombre_usuario'
+    REQUIRED_FIELDS = ['correo', 'nombre']
+
+
     class Meta:
-        managed = False
         db_table = "formularios_usuario"
         ordering = ("nombre",)
 
+    def __str__(self):
+        return self.nombre_usuario
 
-
+    @property
+    def is_active(self):
+        return self.activo
+    
+    def set_password(self, raw_password):
+        from .services import hash_password
+        self.password = hash_password(raw_password)
+        self._password = raw_password
+    
+    def check_password(self, raw_password):
+        from .services import verify_password
+        return verify_password(self.password, raw_password)
 
 class Formulario(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -77,7 +138,7 @@ class Formulario(models.Model):
     auto_envio = models.BooleanField(default=False)
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = 'formularios_formulario'
 
 class RolFormulario(models.Model):
@@ -85,7 +146,7 @@ class RolFormulario(models.Model):
     rol_id = models.ForeignKey(Rol, on_delete=models.CASCADE)
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_rol_formulario"
 
 
@@ -94,7 +155,7 @@ class RolUser(models.Model):
     nombre_de_usuario = models.ForeignKey("formularios.Usuario", on_delete=models.CASCADE,
                                           db_column="nombre_usuario", related_name="roles_enlace")
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_rol_user"
         unique_together = (("id_rol", "nombre_de_usuario"),)
 
@@ -111,7 +172,7 @@ class FormularioIndexVersion(models.Model):
     )
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_formularioindexversion" 
 
 class Formulario_Index_Version(models.Model):
@@ -131,7 +192,7 @@ class Formulario_Index_Version(models.Model):
     )
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_formularios_index_version"
 
 class Pagina(models.Model):
@@ -152,7 +213,7 @@ class Pagina(models.Model):
 
     class Meta:
         ordering = ["secuencia"]
-        managed = False
+        # managed = False
         db_table = "formularios_pagina"
 
 # === Puntero: qué versión de formulario "contiene" cada página ===
@@ -173,7 +234,7 @@ class Pagina_Index_Version(models.Model):
     )
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_pagina_index_version"
 
 
@@ -184,7 +245,7 @@ class PaginaVersion(models.Model):
     id_pagina = models.CharField(max_length=32, db_column="id_pagina", null=True)
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_pagina_version"
 
 
@@ -193,7 +254,7 @@ class ClaseCampo(models.Model):
     estructura = models.TextField(db_column="estructura", null=True, blank=True)
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_clase_campo"
 
 
@@ -208,7 +269,7 @@ class Campo(models.Model):
     requerido = models.BooleanField(db_column="requerido", null=True)
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_campo"
 
 
@@ -225,6 +286,6 @@ class PaginaCampo(models.Model):
     sequence = models.PositiveIntegerField(db_column="sequence", null=True)
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_pagina_campo"
         unique_together = (("id_campo", "id_pagina_version"),) 

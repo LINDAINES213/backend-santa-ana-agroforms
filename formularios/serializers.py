@@ -32,6 +32,7 @@ class CategoriaSerializer(serializers.ModelSerializer):
 #         return CampoSerializer(qs, many=True).data
 
 # serializers.py
+
 class FormularioListSerializer(serializers.ModelSerializer):
     categoria_nombre = serializers.SerializerMethodField()
     class Meta:
@@ -149,7 +150,7 @@ class UsuarioDetalleSerializer(serializers.ModelSerializer):
         fields = ("nombre_usuario", "nombre", "correo", "activo", "roles")
 
 class UsuarioCreateSerializer(serializers.ModelSerializer):
-    contrasena = serializers.CharField(write_only=True, min_length=8, style={"input_type": "password"})
+    password = serializers.CharField(write_only=True, min_length=8, style={"input_type": "password"})
     roles = serializers.PrimaryKeyRelatedField(
         many=True,
         required=False,
@@ -159,7 +160,7 @@ class UsuarioCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Usuario
-        fields = ("nombre_usuario", "nombre", "correo", "contrasena", "activo", "roles")
+        fields = ("nombre_usuario", "nombre", "correo", "password", "activo", "acceso_web", "roles")
 
     def validate(self, attrs):
         if Usuario.objects.filter(correo=attrs["correo"]).exists():
@@ -170,8 +171,8 @@ class UsuarioCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated):
         roles_objs = validated.pop("roles", [])
-        plain = validated.pop("contrasena")
-        validated["contrasena"] = hash_password(plain)
+        plain = validated.pop("password")
+        validated["password"] = hash_password(plain)
 
         # crea usuario
         user = Usuario.objects.create(**validated)
@@ -197,7 +198,7 @@ class UsuarioCreateSerializer(serializers.ModelSerializer):
                         "INSERT INTO formularios_rol_user (id_rol, nombre_usuario) VALUES (%s, %s)",
                         filas
                     )
-                return user
+        return user
 
 class UsuarioReplaceRolesSerializer(serializers.Serializer):
     roles = serializers.PrimaryKeyRelatedField(

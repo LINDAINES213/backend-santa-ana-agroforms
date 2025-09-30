@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "corsheaders",
     'rest_framework',
+    'oauth2_provider',
     "formularios",  
 ]
 
@@ -81,20 +82,60 @@ WSGI_APPLICATION = "backend.wsgi.application"
 
 # Database
 DATABASES = {
-    'default': {
-        'ENGINE': 'mssql',
-        'NAME': os.getenv('DATABASE_NAME'),
-        'USER': os.getenv('DATABASE_USER'),
-        'PASSWORD': os.getenv('DATABASE_PASSWORD'),
-        'HOST': os.getenv('DATABASE_HOST'),
-        'OPTIONS': {
-                    'driver': 'ODBC Driver 17 for SQL Server',
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("DATABASE_NAME"),
+        "USER": os.getenv("DATABASE_USER"),
+        "PASSWORD": os.getenv("DATABASE_PASSWORD"),
+        "HOST": os.getenv("DATABASE_HOST", "localhost"),
+        "PORT": os.getenv("DATABASE_PORT", "5432"),
+        # Opcionales recomendados
+        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),   # pooling simple
+        "ATOMIC_REQUESTS": True,                                   # transacciones por request
+        "OPTIONS": {
+            # Úsalo si tu servidor exige SSL (Heroku, Azure, etc.)
+            # "sslmode": "require",
+            # Ejemplo de search_path si usas varios esquemas:
+            # "options": "-c search_path=public,extras"
         },
     }
 }
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'mssql',
+#         'NAME': os.getenv('DATABASE_NAME'),
+#         'USER': os.getenv('DATABASE_USER'),
+#         'PASSWORD': os.getenv('DATABASE_PASSWORD'),
+#         'HOST': os.getenv('DATABASE_HOST'),
+#         'OPTIONS': {
+#                     'driver': 'ODBC Driver 17 for SQL Server',
+#         },
+#     }
+# }
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'oauth2_provider.contrib.rest_framework.OAuth2Authentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+        'formularios.permissions.IsWebAllowed',
+    ],
+}
 
+# Configuración de OAuth2
+OAUTH2_PROVIDER = {
+    'SCOPES': {
+        'read': 'Read scope',
+        'write': 'Write scope',
+    },
+    'ACCESS_TOKEN_EXPIRE_SECONDS': 36000,  # 10 horas
+    'REFRESH_TOKEN_EXPIRE_SECONDS': 86400,  # 24 horas
+}
+
+AUTH_USER_MODEL = 'formularios.Usuario'
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -113,6 +154,14 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
+
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+    "django.contrib.auth.hashers.BCryptSHA256PasswordHasher",
+]
+
 
 
 # Internationalization

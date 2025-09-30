@@ -25,6 +25,8 @@ from django.conf.urls.static import static
 
 urlpatterns = [
     path('', views.home, name='home'),  # Ruta raíz
-    # path('admin/', admin.site.urls),
+    path('admin/', admin.site.urls),
     path('api/', include('formularios.urls')), 
+    path('oauth/', include('oauth2_provider.urls', namespace='oauth2_provider')),
+    path('api-auth/', include('rest_framework.urls')),  # Agregar esto
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

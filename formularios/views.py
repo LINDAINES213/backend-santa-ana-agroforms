@@ -1,10 +1,10 @@
-from .services import _uuid32_no_dashes, activar_version, crear_campo_en_pagina, crear_campo_y_versionar_pagina, duplicar_formulario_orm
+from .services import _uuid32, _uuid32_no_dashes, activar_version, crear_campo_en_pagina, crear_campo_y_versionar_pagina, duplicar_formulario_orm
 from rest_framework import status, filters, viewsets
 from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
 from django.db import models, connection
-from .models import Campo, Categoria, Formulario, FormularioIndexVersion, Pagina, PaginaVersion, Rol, Usuario
+from .models import Campo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Pagina, PaginaCampo, PaginaVersion, Rol, Usuario
 from django.shortcuts import get_object_or_404
 from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, RolCreateUpdateSerializer, RolSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, UsuarioReplaceRolesSerializer
 from django.http import HttpResponse
@@ -122,68 +122,128 @@ class FormularioViewSet(viewsets.ModelViewSet):
                 {"detail": f"Error eliminando formulario: {str(e)}"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
+        
+    
     def _delete_formulario_cascade(self, formulario_id: str):
-        """
-        Manually handle cascading deletes for unmanaged models
-        Order is important to respect foreign key constraints
-        """
-        with connection.cursor() as cursor:
-            # Convert UUID to 32-char format for database queries
-            formulario_id_32 = formulario_id.replace('-', '').lower()
+            """
+            Elimina un formulario y TODA su jerarquía usando ORM (orden seguro).
+            Compatible con PostgreSQL y evita SQL específico de SQL Server.
+            """
+            with transaction.atomic():
+                # 0) Traer el formulario (UUID real, no en 32 chars)
+                form = Formulario.objects.get(pk=formulario_id)
+
+                # 1) Todas las páginas del formulario (UUID)
+                pages = list(Pagina.objects.filter(formulario_id=form).only("id_pagina"))
+                page_ids = [p.id_pagina for p in pages]
+                page_ids_32 = [uuid.UUID(str(pid)).hex for pid in page_ids]  # para comparar con PaginaVersion.id_pagina (char(32))
+
+                # 2) Todas las versiones de esas páginas (char(32))
+                pv_qs = PaginaVersion.objects.filter(id_pagina__in=page_ids_32)
+                pv_ids = list(pv_qs.values_list("id_pagina_version", flat=True))
+
+                # 3) Enlaces PaginaCampo -> BORRAR PRIMERO (depende de PaginaVersion y Campo)
+                if pv_ids:
+                    PaginaCampo.objects.filter(id_pagina_version_id__in=pv_ids).delete()
+
+                # (Opcional) Borrar Campos huérfanos que ya no estén enlazados a ninguna página
+                Campo.objects.filter(enlaces_pagina__isnull=True).delete()
+
+                # 4) Si tienes la tabla de punteros de páginas a index version (PaginaIndexVersion),
+                #    bórrala por ORM (está definida en tus modelos como Formulario -> PaginaIndexVersion).
+                try:
+                    from .models import PaginaIndexVersion
+                    if pages:
+                        PaginaIndexVersion.objects.filter(id_pagina__in=pages).delete()
+                except Exception:
+                    # Si no existe el modelo/tabla en tu instalación, ignorar
+                    pass
+
+                # 5) Borrar el historial de versiones por página
+                pv_qs.delete()
+
+                # 6) Borrar las páginas del formulario
+                if page_ids:
+                    Pagina.objects.filter(id_pagina__in=page_ids).delete()
+
+                # 7) Borrar la tabla histórica de vínculo formulario-index (formularios_formularios_index_version)
+                #    Está modelada como Formulario_Index_Version con O2O a FormularioIndexVersion
+                fiv_qs = FormularioIndexVersion.objects.filter(formulario_id=form)
+                if fiv_qs.exists():
+                    Formulario_Index_Version.objects.filter(id_index_version__in=fiv_qs).delete()
+
+                # 8) Borrar versiones de formulario
+                fiv_qs.delete()
+
+                # 9) Borrar relaciones rol-formulario (si existen)
+                from .models import RolFormulario
+                RolFormulario.objects.filter(id_formulario=form).delete()
+
+                # 10) Finalmente, borrar el formulario
+                form.delete()
+
+
+    # def _delete_formulario_cascade(self, formulario_id: str):
+    #     """
+    #     Manually handle cascading deletes for unmanaged models
+    #     Order is important to respect foreign key constraints
+    #     """
+    #     with connection.cursor() as cursor:
+    #         # Convert UUID to 32-char format for database queries
+    #         formulario_id_32 = formulario_id.replace('-', '').lower()
             
-            # 1. Delete campo-pagina relationships first (PaginaCampo)
-            cursor.execute("""
-                DELETE pc FROM formularios_pagina_campo pc
-                INNER JOIN formularios_pagina_version pv ON pc.id_pagina_version = pv.id_pagina_version  
-                INNER JOIN formularios_pagina p ON pv.id_pagina = p.id_pagina
-                WHERE p.formulario_id = %s
-            """, [formulario_id_32])
+    #         # 1. Delete campo-pagina relationships first (PaginaCampo)
+    #         cursor.execute("""
+    #             DELETE pc FROM formularios_pagina_campo pc
+    #             INNER JOIN formularios_pagina_version pv ON pc.id_pagina_version = pv.id_pagina_version  
+    #             INNER JOIN formularios_pagina p ON pv.id_pagina = p.id_pagina
+    #             WHERE p.formulario_id = %s
+    #         """, [formulario_id_32])
             
-            # 2. Delete page versions (PaginaVersion)
-            cursor.execute("""
-                DELETE pv FROM formularios_pagina_version pv
-                INNER JOIN formularios_pagina p ON pv.id_pagina = p.id_pagina
-                WHERE p.formulario_id = %s
-            """, [formulario_id_32])
+    #         # 2. Delete page versions (PaginaVersion)
+    #         cursor.execute("""
+    #             DELETE pv FROM formularios_pagina_version pv
+    #             INNER JOIN formularios_pagina p ON pv.id_pagina = p.id_pagina
+    #             WHERE p.formulario_id = %s
+    #         """, [formulario_id_32])
             
-            # 3. Delete page index version pointers (Pagina_Index_Version)
-            cursor.execute("""
-                DELETE piv FROM formularios_pagina_index_version piv
-                INNER JOIN formularios_pagina p ON piv.id_pagina = p.id_pagina
-                WHERE p.formulario_id = %s
-            """, [formulario_id_32])
+    #         # 3. Delete page index version pointers (Pagina_Index_Version)
+    #         cursor.execute("""
+    #             DELETE piv FROM formularios_pagina_index_version piv
+    #             INNER JOIN formularios_pagina p ON piv.id_pagina = p.id_pagina
+    #             WHERE p.formulario_id = %s
+    #         """, [formulario_id_32])
             
-            # 4. Delete pages (Pagina)
-            cursor.execute("""
-                DELETE FROM formularios_pagina 
-                WHERE formulario_id = %s
-            """, [formulario_id_32])
+    #         # 4. Delete pages (Pagina)
+    #         cursor.execute("""
+    #             DELETE FROM formularios_pagina 
+    #             WHERE formulario_id = %s
+    #         """, [formulario_id_32])
             
-            # 5. Delete form index version history (Formulario_Index_Version)
-            cursor.execute("""
-                DELETE fiv FROM formularios_formularios_index_version fiv
-                INNER JOIN formularios_formularioindexversion fv ON fiv.id_index_version = fv.id_index_version
-                WHERE fv.formulario_id = %s
-            """, [formulario_id_32])
+    #         # 5. Delete form index version history (Formulario_Index_Version)
+    #         cursor.execute("""
+    #             DELETE fiv FROM formularios_formularios_index_version fiv
+    #             INNER JOIN formularios_formularioindexversion fv ON fiv.id_index_version = fv.id_index_version
+    #             WHERE fv.formulario_id = %s
+    #         """, [formulario_id_32])
             
-            # 6. Delete form versions (FormularioIndexVersion)
-            cursor.execute("""
-                DELETE FROM formularios_formularioindexversion 
-                WHERE formulario_id = %s
-            """, [formulario_id_32])
+    #         # 6. Delete form versions (FormularioIndexVersion)
+    #         cursor.execute("""
+    #             DELETE FROM formularios_formularioindexversion 
+    #             WHERE formulario_id = %s
+    #         """, [formulario_id_32])
             
-            # 7. Delete role-form relationships (RolFormulario)
-            cursor.execute("""
-                DELETE FROM formularios_rol_formulario 
-                WHERE id_formulario = %s
-            """, [formulario_id_32])
+    #         # 7. Delete role-form relationships (RolFormulario)
+    #         cursor.execute("""
+    #             DELETE FROM formularios_rol_formulario 
+    #             WHERE id_formulario = %s
+    #         """, [formulario_id_32])
             
-            # 8. Finally, delete the form itself (Formulario)
-            cursor.execute("""
-                DELETE FROM formularios_formulario 
-                WHERE id = %s
-            """, [formulario_id_32])
+    #         # 8. Finally, delete the form itself (Formulario)
+    #         cursor.execute("""
+    #             DELETE FROM formularios_formulario 
+    #             WHERE id = %s
+    #         """, [formulario_id_32])
 
     @action(detail=True, methods=['post'], url_path='agregar-pagina')
     @transaction.atomic
@@ -241,31 +301,49 @@ class FormularioViewSet(viewsets.ModelViewSet):
                         fecha_creacion=timezone.now(),
                         id_pagina=_uuid32_no_dashes(str(nueva_pagina.id_pagina)),
                     )
-                    
-                    # Copiar enlaces de campos de la página original
-                    from .models import PaginaCampo
-                    links = list(PaginaCampo.objects
-                                .select_related("id_campo")
-                                .filter(id_pagina_version=pv_src)
-                                .order_by("sequence"))
 
-                    if links:
-                        nuevos_links = [
+                    # Copiar enlaces de campos de la página original CLONANDO cada Campo
+                    links = list(
+                        PaginaCampo.objects
+                        .select_related("id_campo")
+                        .filter(id_pagina_version=pv_src)
+                        .order_by("sequence")
+                    )
+
+                    nuevos_links = []
+                    # Mapa para no clonar 2 veces el mismo campo si se repite
+                    campo_idmap = {}
+
+                    for link in links:
+                        old: Campo = link.id_campo
+                        old_id = str(old.id_campo)
+
+                        # Clona el Campo una sola vez
+                        if old_id not in campo_idmap:
+                            new_campo = Campo.objects.create(
+                                id_campo=_uuid32(),          # NUEVO id_campo (char(32))
+                                tipo=old.tipo,
+                                clase=old.clase,
+                                nombre_campo=old.nombre_campo,
+                                etiqueta=old.etiqueta,
+                                ayuda=old.ayuda,
+                                config=old.config,
+                                requerido=old.requerido,
+                            )
+                            campo_idmap[old_id] = new_campo
+                        else:
+                            new_campo = campo_idmap[old_id]
+
+                        nuevos_links.append(
                             PaginaCampo(
-                                id_campo=link.id_campo,
+                                id_campo=new_campo,          # usa el NUEVO campo clonado
                                 id_pagina_version=pv_dst,
                                 sequence=link.sequence,
                             )
-                            for link in links
-                        ]
+                        )
+
+                    if nuevos_links:
                         PaginaCampo.objects.bulk_create(nuevos_links)
-                        
-                    # Actualizar puntero de la nueva página
-                    from .models import Pagina_Index_Version
-                    Pagina_Index_Version.objects.update_or_create(
-                        id_pagina=nueva_pagina,
-                        defaults={"id_index_version": version_destino},
-                    )
 
         # Calcular secuencia por defecto si no viene
         if "secuencia" in data and str(data.get("secuencia")).strip() not in ("", "0", "None"):

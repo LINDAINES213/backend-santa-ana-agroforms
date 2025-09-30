@@ -61,3 +61,13 @@ def _registrar_historial_al_crear_version(sender, instance: FormularioIndexVersi
     # Asegura que se ejecute cuando la transacción que creó la versión ya esté confirmada
     transaction.on_commit(_do)
 
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from oauth2_provider.models import AccessToken, RefreshToken
+from .models import Usuario
+
+@receiver(post_save, sender=Usuario)
+def revoke_tokens_when_flags_change(sender, instance: Usuario, **kwargs):
+    if (not instance.acceso_web) or (not instance.activo):
+        AccessToken.objects.filter(user=instance).delete()
+        RefreshToken.objects.filter(user=instance).delete()

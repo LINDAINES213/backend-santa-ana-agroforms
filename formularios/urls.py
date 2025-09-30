@@ -1,4 +1,5 @@
 from django.urls import path, include
+from formularios import auth_views
 from rest_framework.routers import DefaultRouter
 from .views import CategoriaViewSet, FormularioViewSet, PaginaViewSet, UsuarioViewSet, RolViewSet, CampoViewSet, FormularioListViewSet
 
@@ -14,7 +15,10 @@ router.register(r"formularios-lite", FormularioListViewSet, basename="formulario
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('auth/login/', auth_views.login, name='login'),
+    path('auth/logout/', auth_views.logout, name='logout'),
+    path('auth/me/', auth_views.user_info, name='user-info'),
 ]
 
 
-urlpatterns = router.urls
+# urlpatterns = router.urls
