@@ -21,15 +21,6 @@ class Categoria(models.Model):
         # managed = False
         db_table = 'formularios_categoria'
 
-class Rol(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    nombre = models.CharField(max_length=50, unique=True)
-    descripcion = models.TextField(blank=True)
-
-    class Meta:
-        # managed = False
-        db_table = "formularios_rol"  
-
 # class Usuario(models.Model):
 #     nombre_usuario = models.CharField(max_length=50, primary_key=True, db_column="nombre_usuario")
 #     nombre = models.CharField(max_length=100)
@@ -58,13 +49,6 @@ class Usuario(AbstractBaseUser, PermissionsMixin):
     acceso_web = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
-
-
-    roles = models.ManyToManyField(
-        "Rol",
-        through="RolUser",
-        related_name="usuarios",
-    )
 
     # Agregar estos campos para evitar conflictos
     groups = models.ManyToManyField(
@@ -141,23 +125,13 @@ class Formulario(models.Model):
         # managed = False
         db_table = 'formularios_formulario'
 
-class RolFormulario(models.Model):
+class UserFormulario(models.Model):
     id_formulario = models.ForeignKey(Formulario, on_delete=models.CASCADE)
-    rol_id = models.ForeignKey(Rol, on_delete=models.CASCADE)
+    id_usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE)
 
     class Meta:
         # managed = False
-        db_table = "formularios_rol_formulario"
-
-
-class RolUser(models.Model):
-    id_rol = models.ForeignKey("formularios.Rol", on_delete=models.CASCADE, db_column="id_rol")
-    nombre_de_usuario = models.ForeignKey("formularios.Usuario", on_delete=models.CASCADE,
-                                          db_column="nombre_usuario", related_name="roles_enlace")
-    class Meta:
-        # managed = False
-        db_table = "formularios_rol_user"
-        unique_together = (("id_rol", "nombre_de_usuario"),)
+        db_table = "formularios_user_formulario"
 
 class FormularioIndexVersion(models.Model):
     id_index_version = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -289,3 +263,24 @@ class PaginaCampo(models.Model):
         # managed = False
         db_table = "formularios_pagina_campo"
         unique_together = (("id_campo", "id_pagina_version"),) 
+
+class FuenteDatos(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nombre = models.CharField(max_length=200)
+    descripcion = models.TextField(blank=True)
+    archivo_nombre = models.CharField(max_length=255)  # nombre original
+    blob_name = models.CharField(max_length=500)  # nombre en Azure
+    blob_url = models.URLField(max_length=1000)
+    tipo_archivo = models.CharField(max_length=10, choices=[('excel', 'Excel'), ('csv', 'CSV')])
+    columnas = models.JSONField(default=list)  # lista de nombres de columnas
+    preview_data = models.JSONField(default=list)  # primeras 5 filas para preview
+    fecha_subida = models.DateTimeField(auto_now_add=True)
+    activo = models.BooleanField(default=True)
+    creado_por = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, related_name='fuentes_datos')
+
+    class Meta:
+        db_table = 'formularios_fuente_datos'
+        ordering = ['-fecha_subida']
+
+    def __str__(self):
+        return self.nombre

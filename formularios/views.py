@@ -1,15 +1,174 @@
-from .services import _uuid32, _uuid32_no_dashes, activar_version, crear_campo_en_pagina, crear_campo_y_versionar_pagina, duplicar_formulario_orm
+from .services import _uuid32, _uuid32_no_dashes, activar_version, crear_campo_en_pagina, crear_campo_y_versionar_pagina, duplicar_formulario, uuid32
 from rest_framework import status, filters, viewsets
 from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
 from django.db import models, connection
-from .models import Campo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Pagina, PaginaCampo, PaginaVersion, Rol, Usuario
+from .models import Campo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
 from django.shortcuts import get_object_or_404
-from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, RolCreateUpdateSerializer, RolSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, UsuarioReplaceRolesSerializer
+from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer
 from django.http import HttpResponse
 from django.utils import timezone
 import uuid
+
+from .azure_storage import AzureBlobStorageService
+from .models import FuenteDatos
+from .serializers import FuenteDatosSerializer, FuenteDatosCreateSerializer
+from rest_framework.parsers import MultiPartParser, FormParser
+from . import services
+
+
+
+class FuenteDatosViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar Fuentes de Datos (Excel/CSV en Azure Blob Storage)
+    
+    POST /api/fuentes-datos/           - Subir nuevo archivo
+    GET  /api/fuentes-datos/           - Listar todas las fuentes
+    GET  /api/fuentes-datos/{id}/      - Detalle de una fuente
+    PUT  /api/fuentes-datos/{id}/      - Actualizar metadatos (no archivo)
+    DELETE /api/fuentes-datos/{id}/    - Eliminar fuente y archivo
+    POST /api/fuentes-datos/{id}/preview/ - Re-generar preview
+    GET  /api/fuentes-datos/{id}/download/ - Descargar archivo original
+    """
+    queryset = FuenteDatos.objects.all()
+    serializer_class = FuenteDatosSerializer
+    parser_classes = (MultiPartParser, FormParser)
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return FuenteDatosCreateSerializer
+        return FuenteDatosSerializer
+    
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        """Subir archivo a Azure y crear registro"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        archivo = serializer.validated_data['archivo']
+        nombre = serializer.validated_data['nombre']
+        descripcion = serializer.validated_data.get('descripcion', '')
+        
+        try:
+            # 1. Parse archivo para obtener preview y columnas
+            file_extension = archivo.name.split('.')[-1]
+            azure_service = AzureBlobStorageService()
+            
+            columnas, preview_data = azure_service.parse_file_preview(
+                archivo, file_extension
+            )
+            
+            # 2. Subir a Azure Blob Storage
+            blob_name, blob_url = azure_service.upload_file(
+                archivo, archivo.name
+            )
+            
+            # 3. Crear registro en BD
+            fuente_datos = FuenteDatos.objects.create(
+                nombre=nombre,
+                descripcion=descripcion,
+                archivo_nombre=archivo.name,
+                blob_name=blob_name,
+                blob_url=blob_url,
+                tipo_archivo='excel' if file_extension in ['xlsx', 'xls'] else 'csv',
+                columnas=columnas,
+                preview_data=preview_data,
+                creado_por=request.user if request.user.is_authenticated else None
+            )
+            
+            return Response(
+                FuenteDatosSerializer(fuente_datos).data,
+                status=status.HTTP_201_CREATED
+            )
+            
+        except ValueError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error subiendo archivo: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        """Eliminar fuente de datos y archivo de Azure"""
+        fuente_datos = self.get_object()
+        
+        try:
+            # Eliminar de Azure
+            azure_service = AzureBlobStorageService()
+            azure_service.delete_file(fuente_datos.blob_name)
+            
+            # Eliminar registro
+            fuente_datos.delete()
+            
+            return Response(
+                {"detail": "Fuente de datos eliminada exitosamente"},
+                status=status.HTTP_204_NO_CONTENT
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error eliminando archivo: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['get'], url_path='download')
+    def download(self, request, pk=None):
+        """Descargar archivo original desde Azure"""
+        fuente_datos = self.get_object()
+        
+        try:
+            azure_service = AzureBlobStorageService()
+            file_content = azure_service.download_file(fuente_datos.blob_name)
+            
+            response = HttpResponse(
+                file_content,
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                if fuente_datos.tipo_archivo == 'excel' else 'text/csv'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{fuente_datos.archivo_nombre}"'
+            
+            return response
+        except Exception as e:
+            return Response(
+                {"detail": f"Error descargando archivo: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=True, methods=['post'], url_path='preview')
+    def regenerate_preview(self, request, pk=None):
+        """Re-generar preview desde Azure (útil si cambió el archivo)"""
+        fuente_datos = self.get_object()
+        
+        try:
+            azure_service = AzureBlobStorageService()
+            file_content = azure_service.download_file(fuente_datos.blob_name)
+            
+            from io import BytesIO
+            file_obj = BytesIO(file_content)
+            
+            columnas, preview_data = azure_service.parse_file_preview(
+                file_obj,
+                fuente_datos.archivo_nombre.split('.')[-1]
+            )
+            
+            fuente_datos.columnas = columnas
+            fuente_datos.preview_data = preview_data
+            fuente_datos.save()
+            
+            return Response(
+                FuenteDatosSerializer(fuente_datos).data,
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error regenerando preview: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 def home(request):
     return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
@@ -85,14 +244,12 @@ class FormularioViewSet(viewsets.ModelViewSet):
     lookup_field = "id"
 
     @action(detail=True, methods=["post"], url_path="duplicar")
-    def duplicar(self, request, id=None):
-        try:
-            out = duplicar_formulario_orm(id)
-            return Response(out, status=status.HTTP_201_CREATED)
-        except Formulario.DoesNotExist:
-            return Response({"detail": "Formulario no encontrado."}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({"detail": f"Fallo duplicando: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    def duplicar(self, request, *args, **kwargs):
+        formulario = self.get_object()
+        nuevo_nombre = request.data.get("nombre")  # opcional
+        clon = services.duplicar_formulario(formulario, nuevo_nombre=nuevo_nombre)
+        data = FormularioSerializer(clon, context={"request": request}).data
+        return Response(data, status=status.HTTP_201_CREATED)
         
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
@@ -175,206 +332,61 @@ class FormularioViewSet(viewsets.ModelViewSet):
                 # 8) Borrar versiones de formulario
                 fiv_qs.delete()
 
-                # 9) Borrar relaciones rol-formulario (si existen)
-                from .models import RolFormulario
-                RolFormulario.objects.filter(id_formulario=form).delete()
-
                 # 10) Finalmente, borrar el formulario
                 form.delete()
 
 
-    # def _delete_formulario_cascade(self, formulario_id: str):
-    #     """
-    #     Manually handle cascading deletes for unmanaged models
-    #     Order is important to respect foreign key constraints
-    #     """
-    #     with connection.cursor() as cursor:
-    #         # Convert UUID to 32-char format for database queries
-    #         formulario_id_32 = formulario_id.replace('-', '').lower()
-            
-    #         # 1. Delete campo-pagina relationships first (PaginaCampo)
-    #         cursor.execute("""
-    #             DELETE pc FROM formularios_pagina_campo pc
-    #             INNER JOIN formularios_pagina_version pv ON pc.id_pagina_version = pv.id_pagina_version  
-    #             INNER JOIN formularios_pagina p ON pv.id_pagina = p.id_pagina
-    #             WHERE p.formulario_id = %s
-    #         """, [formulario_id_32])
-            
-    #         # 2. Delete page versions (PaginaVersion)
-    #         cursor.execute("""
-    #             DELETE pv FROM formularios_pagina_version pv
-    #             INNER JOIN formularios_pagina p ON pv.id_pagina = p.id_pagina
-    #             WHERE p.formulario_id = %s
-    #         """, [formulario_id_32])
-            
-    #         # 3. Delete page index version pointers (Pagina_Index_Version)
-    #         cursor.execute("""
-    #             DELETE piv FROM formularios_pagina_index_version piv
-    #             INNER JOIN formularios_pagina p ON piv.id_pagina = p.id_pagina
-    #             WHERE p.formulario_id = %s
-    #         """, [formulario_id_32])
-            
-    #         # 4. Delete pages (Pagina)
-    #         cursor.execute("""
-    #             DELETE FROM formularios_pagina 
-    #             WHERE formulario_id = %s
-    #         """, [formulario_id_32])
-            
-    #         # 5. Delete form index version history (Formulario_Index_Version)
-    #         cursor.execute("""
-    #             DELETE fiv FROM formularios_formularios_index_version fiv
-    #             INNER JOIN formularios_formularioindexversion fv ON fiv.id_index_version = fv.id_index_version
-    #             WHERE fv.formulario_id = %s
-    #         """, [formulario_id_32])
-            
-    #         # 6. Delete form versions (FormularioIndexVersion)
-    #         cursor.execute("""
-    #             DELETE FROM formularios_formularioindexversion 
-    #             WHERE formulario_id = %s
-    #         """, [formulario_id_32])
-            
-    #         # 7. Delete role-form relationships (RolFormulario)
-    #         cursor.execute("""
-    #             DELETE FROM formularios_rol_formulario 
-    #             WHERE id_formulario = %s
-    #         """, [formulario_id_32])
-            
-    #         # 8. Finally, delete the form itself (Formulario)
-    #         cursor.execute("""
-    #             DELETE FROM formularios_formulario 
-    #             WHERE id = %s
-    #         """, [formulario_id_32])
-
     @action(detail=True, methods=['post'], url_path='agregar-pagina')
     @transaction.atomic
-    def agregar_pagina(self, request, id=None):
+    def agregar_pagina(self, request, *args, **kwargs):
         formulario = self.get_object()
-        data = request.data
-
-        # ¿Creamos nueva versión? (por defecto sí: bump=1)
         bump = request.query_params.get("bump", "1") != "0"
 
-        # Última versión existente por fecha (si no hay, creamos v1)
-        ultima_version = (FormularioIndexVersion.objects
-                .filter(formulario_id=formulario)
-                .order_by('-fecha_creacion')
-                .first())
-
-        if ultima_version is None:
-            ultima_version = FormularioIndexVersion.objects.create(formulario_id=formulario)
+        # última versión o crea v1
+        ultima_version = (
+            FormularioIndexVersion.objects
+            .filter(formulario_id=formulario).order_by('-fecha_creacion').first()
+        ) or FormularioIndexVersion.objects.create(formulario_id=formulario)
 
         version_destino = ultima_version
-
-        activar_version(formulario=formulario, nueva_version=version_destino)
-
-        # Si se solicita "bump", creamos una nueva versión y clonamos páginas CON sus campos
         if bump:
             version_destino = FormularioIndexVersion.objects.create(formulario_id=formulario)
-
-            # Clonar TODAS las páginas de la última versión hacia la nueva CON sus campos
-            paginas_src = (Pagina.objects
-                        .filter(index_version=ultima_version)
-                        .order_by("secuencia"))
-            
-            for p in paginas_src:
-                # 1) Crear la nueva página
-                nueva_pagina = Pagina.objects.create(
-                    index_version=version_destino,
-                    formulario_id=formulario,
-                    secuencia=p.secuencia,
-                    nombre=p.nombre,
-                    descripcion=p.descripcion,
+            # mover puntero de todas las páginas existentes a la nueva versión
+            for p in Pagina.objects.filter(formulario_id=formulario).only("id_pagina"):
+                Pagina_Index_Version.objects.update_or_create(
+                    id_pagina=p,
+                    defaults={"id_index_version": version_destino},
                 )
-                
-                # 2) Clonar los campos de la página original
-                # Obtener la última versión de la página original
-                id_pagina_32 = _uuid32_no_dashes(str(p.id_pagina))
-                pv_src = (PaginaVersion.objects
-                        .filter(id_pagina=id_pagina_32)
-                        .order_by("-fecha_creacion")
-                        .first())
-                
-                if pv_src:
-                    # Crear nueva versión para la página clonada
-                    pv_dst = PaginaVersion.objects.create(
-                        id_pagina_version=_uuid32_no_dashes(str(uuid.uuid4())),
-                        fecha_creacion=timezone.now(),
-                        id_pagina=_uuid32_no_dashes(str(nueva_pagina.id_pagina)),
-                    )
 
-                    # Copiar enlaces de campos de la página original CLONANDO cada Campo
-                    links = list(
-                        PaginaCampo.objects
-                        .select_related("id_campo")
-                        .filter(id_pagina_version=pv_src)
-                        .order_by("sequence")
-                    )
+        # calcular secuencia
+        last_seq = (
+            Pagina.objects.filter(formulario_id=formulario)
+            .aggregate(max_seq=models.Max("secuencia"))
+            .get("max_seq") or 0
+        )
+        secuencia = last_seq + 1
 
-                    nuevos_links = []
-                    # Mapa para no clonar 2 veces el mismo campo si se repite
-                    campo_idmap = {}
-
-                    for link in links:
-                        old: Campo = link.id_campo
-                        old_id = str(old.id_campo)
-
-                        # Clona el Campo una sola vez
-                        if old_id not in campo_idmap:
-                            new_campo = Campo.objects.create(
-                                id_campo=_uuid32(),          # NUEVO id_campo (char(32))
-                                tipo=old.tipo,
-                                clase=old.clase,
-                                nombre_campo=old.nombre_campo,
-                                etiqueta=old.etiqueta,
-                                ayuda=old.ayuda,
-                                config=old.config,
-                                requerido=old.requerido,
-                            )
-                            campo_idmap[old_id] = new_campo
-                        else:
-                            new_campo = campo_idmap[old_id]
-
-                        nuevos_links.append(
-                            PaginaCampo(
-                                id_campo=new_campo,          # usa el NUEVO campo clonado
-                                id_pagina_version=pv_dst,
-                                sequence=link.sequence,
-                            )
-                        )
-
-                    if nuevos_links:
-                        PaginaCampo.objects.bulk_create(nuevos_links)
-
-        # Calcular secuencia por defecto si no viene
-        if "secuencia" in data and str(data.get("secuencia")).strip() not in ("", "0", "None"):
-            secuencia = int(data.get("secuencia"))
-        else:
-            last_seq = (Pagina.objects
-                        .filter(index_version=version_destino)
-                        .aggregate(max_seq=models.Max("secuencia"))
-                        .get("max_seq") or 0)
-            secuencia = last_seq + 1
-
-        # Crear la nueva página en la versión destino
+        # crear NUEVA página lógica (id_pagina nuevo SOLO porque es una página nueva)
         nueva_pagina = Pagina.objects.create(
-            index_version=version_destino,
+            index_version=version_destino,     # versión de nacimiento
             formulario_id=formulario,
             secuencia=secuencia,
-            nombre=data.get('nombre', 'Nueva página'),
-            descripcion=data.get('descripcion', ''),
+            nombre=request.data.get('nombre', 'Nueva página'),
+            descripcion=request.data.get('descripcion', ''),
         )
 
-        return Response({
-            "detail": f"Página creada en versión {str(version_destino.id_index_version)}",
-            "formulario_id": str(formulario.id),
-            "version_id": str(version_destino.id_index_version),
-            "pagina": {
-                "id_pagina": str(nueva_pagina.id_pagina),
-                "secuencia": nueva_pagina.secuencia,
-                "nombre": nueva_pagina.nombre,
-                "descripcion": nueva_pagina.descripcion,
-            }
-        }, status=status.HTTP_201_CREATED)
+        Pagina_Index_Version.objects.update_or_create(
+            id_pagina=nueva_pagina,
+            defaults={"id_index_version": version_destino},
+        )
+
+        PaginaVersion.objects.create(
+            id_pagina_version=_uuid32(),
+            id_pagina=_uuid32_no_dashes(str(nueva_pagina.id_pagina)),
+            fecha_creacion=timezone.now(),
+        )
+
+        return Response({"ok": True, "id_pagina": str(nueva_pagina.id_pagina)}, status=201)
 
 class UsuarioViewSet(viewsets.ModelViewSet):
     queryset = Usuario.objects.all().order_by("nombre")
@@ -386,64 +398,14 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             return UsuarioCreateSerializer
         return UsuarioDetalleSerializer
 
-    @action(detail=True, methods=["put"], url_path="roles")
-    def replace_roles(self, request, nombre_usuario=None):
-        user = self.get_object()
-        ser = UsuarioReplaceRolesSerializer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        ser.update(user, ser.validated_data)
-        return Response(UsuarioDetalleSerializer(user, context=self.get_serializer_context()).data, status=status.HTTP_200_OK)
+    # @action(detail=True, methods=["put"], url_path="roles")
+    # def replace_roles(self, request, nombre_usuario=None):
+    #     user = self.get_object()
+    #     ser = UsuarioReplaceRolesSerializer(data=request.data)
+    #     ser.is_valid(raise_exception=True)
+    #     ser.update(user, ser.validated_data)
+    #     return Response(UsuarioDetalleSerializer(user, context=self.get_serializer_context()).data, status=status.HTTP_200_OK)
 
-class RolViewSet(viewsets.ModelViewSet):
-    queryset = Rol.objects.all().order_by("nombre")
-    serializer_class = RolSerializer
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["nombre", "descripcion"]   # ?search=admin
-    ordering_fields = ["nombre", "id"]          # ?ordering=nombre  | ?ordering=-nombre
-
-    def get_serializer_class(self):
-        if self.action in ("create", "update", "partial_update"):
-            return RolCreateUpdateSerializer
-        return RolSerializer
-
-    @action(detail=False, methods=["post"], url_path="bulk")
-    def bulk_create(self, request):
-        """
-        Crea roles en lote sin duplicar por nombre (case-insensitive).
-        Body: [{ "nombre": "Admin", "descripcion": "..." }, ...]
-        """
-        items = request.data
-        if not isinstance(items, list):
-            return Response({"detail": "Se esperaba una lista de objetos."},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        creados, existentes, errores = [], [], []
-
-        for i, item in enumerate(items, start=1):
-            nombre = (item or {}).get("nombre")
-            descripcion = (item or {}).get("descripcion", "")
-            if not nombre or not isinstance(nombre, str):
-                errores.append({"index": i, "error": "nombre requerido"})
-                continue
-
-            # buscar case-insensitive
-            obj = Rol.objects.filter(nombre__iexact=nombre).first()
-            if obj:
-                existentes.append({"index": i, "id": str(obj.id), "nombre": obj.nombre})
-                continue
-
-            # Crear usando el serializer para validar reglas (longitud, etc.)
-            ser = RolCreateUpdateSerializer(data={"nombre": nombre, "descripcion": descripcion})
-            if ser.is_valid():
-                obj = ser.save()
-                creados.append({"index": i, "id": str(obj.id), "nombre": obj.nombre})
-            else:
-                errores.append({"index": i, "error": ser.errors})
-
-        return Response(
-            {"creados": creados, "existentes": existentes, "errores": errores},
-            status=status.HTTP_201_CREATED if creados else status.HTTP_200_OK
-        )
 
 class CampoViewSet(viewsets.ReadOnlyModelViewSet):
     """

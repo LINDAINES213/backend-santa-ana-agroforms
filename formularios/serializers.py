@@ -2,7 +2,7 @@ from .services import _uuid32_no_dashes, hash_password, uuid32
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Campo, Categoria, Formulario, FormularioIndexVersion, Pagina, PaginaCampo, PaginaVersion, Rol, RolUser, Usuario
+from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
 # from .validators import validate_config_against_schema
 from django.db import connection
 from rest_framework.validators import UniqueValidator
@@ -13,6 +13,79 @@ class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Categoria
         fields = '__all__'
+
+class FuenteDatosSerializer(serializers.ModelSerializer):
+    creado_por_nombre = serializers.CharField(source='creado_por.nombre', read_only=True)
+    archivo = serializers.FileField(write_only=True, required=False)
+    
+    class Meta:
+        model = FuenteDatos
+        fields = [
+            'id', 'nombre', 'descripcion', 'archivo_nombre', 
+            'blob_url', 'tipo_archivo', 'columnas', 'preview_data',
+            'fecha_subida', 'activo', 'creado_por', 'creado_por_nombre',
+            'archivo'
+        ]
+        read_only_fields = [
+            'id', 'blob_url', 'tipo_archivo', 'columnas', 
+            'preview_data', 'fecha_subida', 'blob_name'
+        ]
+    
+    def validate_archivo(self, value):
+        """Valida el archivo subido"""
+        if value:
+            # Validar extensión
+            filename = value.name
+            extension = filename.split('.')[-1].lower()
+            if extension not in ['xlsx', 'xls', 'csv']:
+                raise serializers.ValidationError(
+                    "Solo se permiten archivos Excel (.xlsx, .xls) o CSV (.csv)"
+                )
+            
+            # Validar tamaño (máx 10MB)
+            if value.size > 10 * 1024 * 1024:
+                raise serializers.ValidationError(
+                    "El archivo no puede superar los 10MB"
+                )
+        
+        return value
+
+
+class FuenteDatosCreateSerializer(serializers.Serializer):
+    nombre = serializers.CharField(max_length=200)
+    descripcion = serializers.CharField(required=False, allow_blank=True)
+    archivo = serializers.FileField()
+    
+    def validate_archivo(self, value):
+        """Valida el archivo subido"""
+        filename = value.name
+        extension = filename.split('.')[-1].lower()
+        if extension not in ['xlsx', 'xls', 'csv']:
+            raise serializers.ValidationError(
+                "Solo se permiten archivos Excel (.xlsx, .xls) o CSV (.csv)"
+            )
+        
+        if value.size > 10 * 1024 * 1024:
+            raise serializers.ValidationError(
+                "El archivo no puede superar los 10MB"
+            )
+        
+        return value
+    
+    def create(self, validated_data):
+        archivo = validated_data.pop("archivo")
+        request = self.context.get("request")
+        usuario = getattr(request, "user", None)
+
+        instancia = FuenteDatos.objects.create(
+            nombre=validated_data.get("nombre"),
+            descripcion=validated_data.get("descripcion", ""),
+            archivo_nombre=archivo.name,
+            creado_por=usuario,
+            activo=True,
+        )
+
+        return instancia
 
 # class PaginaSerializer(serializers.ModelSerializer):
 #     class Meta:
@@ -127,40 +200,40 @@ class FormularioSerializer(serializers.ModelSerializer):
         return obj.categoria.nombre if obj.categoria else None
 
     def get_paginas(self, obj):
-        # Siempre la versión más reciente por fecha
-        last_version = (FormularioIndexVersion.objects
-                        .filter(formulario_id=obj)         # FK correcto
-                        .order_by("-fecha_creacion")
-                        .first())
+        # 1) última versión del formulario
+        last_version = (
+            FormularioIndexVersion.objects
+            .filter(formulario_id=obj)
+            .order_by("-fecha_creacion")
+            .first()
+        )
         if not last_version:
             return []
-        qs = Pagina.objects.filter(index_version=last_version).order_by("secuencia")
+
+        # 2) IDs de páginas vigentes para esa versión
+        page_ids = (
+            Pagina_Index_Version.objects
+            .filter(id_index_version=last_version)
+            .values_list("id_pagina", flat=True)
+        )
+
+        # 3) Devuelve esas Páginas (ids estables)
+        qs = Pagina.objects.filter(id_pagina__in=page_ids).order_by("secuencia")
         return PaginaConCamposSerializer(qs, many=True, context=self.context).data
 
-class RolLiteSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Rol
-        fields = ("id", "nombre", "descripcion")
-
 class UsuarioDetalleSerializer(serializers.ModelSerializer):
-    roles = RolLiteSerializer(many=True, read_only=True)
+    # usuario = UsuarioCreateSerializer(many=True, read_only=True)
 
     class Meta:
         model = Usuario
-        fields = ("nombre_usuario", "nombre", "correo", "activo", "roles")
+        fields = ("nombre_usuario", "nombre", "correo", "activo", "acceso_web")
 
 class UsuarioCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8, style={"input_type": "password"})
-    roles = serializers.PrimaryKeyRelatedField(
-        many=True,
-        required=False,
-        queryset=Rol.objects.all(),
-        help_text="Selecciona uno o varios roles (Ctrl/Cmd + click)."
-    )
 
     class Meta:
         model = Usuario
-        fields = ("nombre_usuario", "nombre", "correo", "password", "activo", "acceso_web", "roles")
+        fields = ("nombre_usuario", "nombre", "correo", "password", "activo", "acceso_web")
 
     def validate(self, attrs):
         if Usuario.objects.filter(correo=attrs["correo"]).exists():
@@ -170,90 +243,13 @@ class UsuarioCreateSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated):
-        roles_objs = validated.pop("roles", [])
         plain = validated.pop("password")
         validated["password"] = hash_password(plain)
 
         # crea usuario
         user = Usuario.objects.create(**validated)
-
-        # INSERTS a la tabla puente con SQL crudo (evita la columna 'id')
-        if roles_objs:
-            # evitar duplicados actuales
-            existentes = set(
-                RolUser.objects
-                .filter(nombre_de_usuario=user, id_rol__in=[r.id for r in roles_objs])
-                .values_list("id_rol_id", flat=True)
-            )
-            # Normalízalos por si vienen con mayúsculas
-            existentes = { (e or "").replace("-", "").lower() for e in existentes }
-
-            # filas a insertar (id_rol debe ir como 32 chars)
-            filas = [(uuid32(r.id), str(user.nombre_usuario))
-                    for r in roles_objs if uuid32(r.id) not in existentes]
-
-            if filas:
-                with connection.cursor() as cur:
-                    cur.executemany(
-                        "INSERT INTO formularios_rol_user (id_rol, nombre_usuario) VALUES (%s, %s)",
-                        filas
-                    )
         return user
 
-class UsuarioReplaceRolesSerializer(serializers.Serializer):
-    roles = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=Rol.objects.all(),
-        required=True,
-        help_text="Selecciona los roles finales del usuario."
-    )
-
-    def update(self, user: Usuario, validated):
-        new_ids = {r.id for r in validated["roles"]}
-        cur_ids = set(
-            Rol.objects.filter(roluser__nombre_de_usuario=user)
-            .values_list("id", flat=True)
-        )
-        # normaliza a 32
-        cur_ids = { uuid32(x) for x in cur_ids }
-
-        new_ids = { uuid32(r.id) for r in validated["roles"] }
-
-        to_add = new_ids - cur_ids
-        to_del = cur_ids - new_ids
-
-        if to_del:
-            # OJO: si id_rol en la tabla puente está en 32 chars, hay que pasar 32
-            RolUser.objects.filter(
-                nombre_de_usuario=user,
-                id_rol_id__in=list(to_del)
-            ).delete()
-
-        if to_add:
-            filas = [(rid, str(user.nombre_usuario)) for rid in to_add]  # rid ya viene 32
-            with connection.cursor() as cur:
-                cur.executemany(
-                    "INSERT INTO formularios_rol_user (id_rol, nombre_usuario) VALUES (%s, %s)",
-                    filas
-                )
-    
-class RolSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Rol
-        fields = ("id", "nombre", "descripcion")
-
-
-class RolCreateUpdateSerializer(serializers.ModelSerializer):
-    # unicidad case-insensitive para evitar “Admin” vs “admin”
-    nombre = serializers.CharField(
-        max_length=50,
-        validators=[UniqueValidator(queryset=Rol.objects.all(), lookup="iexact")]
-    )
-
-    class Meta:
-        model = Rol
-        fields = ("id", "nombre", "descripcion")
-        read_only_fields = ("id",)
 
 class CampoSerializer(serializers.ModelSerializer):
     class Meta:

@@ -86,7 +86,8 @@ def login(request):
         )
 
         # 7) payload de respuesta
-        roles = list(usuario.roles.values('id', 'nombre', 'descripcion'))
+        acceso_web = bool(usuario.acceso_web)
+
 
         return Response({
             "ok": True,
@@ -99,7 +100,7 @@ def login(request):
                 "nombre_usuario": usuario.nombre_usuario,
                 "nombre": usuario.nombre,
                 "correo": usuario.correo,
-                "roles": roles
+                "acceso_web": acceso_web
             }
         }, status=status.HTTP_200_OK)
 
@@ -137,7 +138,9 @@ def user_info(request):
     Header: Authorization: Bearer <token>
     """
     user = request.user
-    roles = list(user.roles.values('id', 'nombre', 'descripcion'))
+    # BIEN:
+    acceso_web = bool(user.acceso_web)
+
     
     return Response({
         'nombre_usuario': user.nombre_usuario,
@@ -145,5 +148,5 @@ def user_info(request):
         'correo': user.correo,
         'activo': user.activo,
         'acceso_web': user.acceso_web,
-        'roles': roles
+        'acceso_web': acceso_web
     })

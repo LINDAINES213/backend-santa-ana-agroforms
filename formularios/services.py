@@ -76,7 +76,7 @@ def activar_version(formulario, nueva_version) -> None:
 
     if PaginaIndex:
         from .models import Pagina
-        for p in Pagina.objects.filter(index_version=nueva_version):
+        for p in Pagina.objects.filter(index_version=nueva_version).only("id_pagina"):
             PaginaIndex.objects.update_or_create(
                 id_pagina=p,
                 defaults={
@@ -363,117 +363,133 @@ from .services import _uuid32, _uuid32_no_dashes  # ya existen en tu módulo
 
 
 @transaction.atomic
-def duplicar_formulario_orm(formulario_id) -> dict:
-    # 1) Origen
-    f_src: Formulario = Formulario.objects.get(pk=formulario_id)
-
-    # 2) Crea clon de Formulario
-    f_dst = Formulario.objects.create(
-        id=uuid.uuid4(),
-        categoria=f_src.categoria,
-        nombre=f"{f_src.nombre}_Copia",
-        descripcion=f_src.descripcion,
-        permitir_fotos=f_src.permitir_fotos,
-        permitir_gps=f_src.permitir_gps,
-        disponible_desde_fecha=f_src.disponible_desde_fecha,
-        disponible_hasta_fecha=f_src.disponible_hasta_fecha,
-        estado=f_src.estado,
-        forma_envio=f_src.forma_envio,
-        es_publico=f_src.es_publico,
-        auto_envio=f_src.auto_envio,
+def duplicar_formulario(formulario: Formulario, nuevo_nombre: str | None = None) -> Formulario:
+    # 1) crear clon de formulario
+    clon = Formulario.objects.create(
+        categoria=formulario.categoria,
+        nombre=nuevo_nombre or f"{formulario.nombre}_Copia",
+        descripcion=formulario.descripcion,
+        permitir_fotos=formulario.permitir_fotos,
+        permitir_gps=formulario.permitir_gps,
+        disponible_desde_fecha=formulario.disponible_desde_fecha,
+        disponible_hasta_fecha=formulario.disponible_hasta_fecha,
+        estado=formulario.estado,
+        forma_envio=formulario.forma_envio,
+        es_publico=formulario.es_publico,
+        auto_envio=formulario.auto_envio,
     )
 
-    # 3) Última versión del original
-    ver_src = (FormularioIndexVersion.objects
-               .filter(formulario_id=f_src)
-               .order_by("-fecha_creacion")
-               .first())
+    # 2) crear versión de índice para el CLON
+    idx_clon = FormularioIndexVersion.objects.create(formulario_id=clon)
 
-    # Si no hay versiones/páginas, devolvemos el clon vacío
-    if not ver_src:
-        return {"formulario_id": str(f_dst.id), "paginas": []}
+    # 3) páginas "vigentes" del original (según su última versión)
+    idx_orig = (FormularioIndexVersion.objects
+                .filter(formulario_id=formulario)
+                .order_by("-fecha_creacion")
+                .first())
 
-    # 4) Nueva versión para el clon
-    ver_dst = FormularioIndexVersion.objects.create(
-        id_index_version=uuid.uuid4(),
-        formulario_id=f_dst
-    )
+    if idx_orig:
+        page_ids = (Pagina_Index_Version.objects
+                    .filter(id_index_version=idx_orig)
+                    .values_list("id_pagina", flat=True))
+        paginas_origen = Pagina.objects.filter(id_pagina__in=page_ids).order_by("secuencia")
+    else:
+        # fallback si el original no tiene versiones creadas aún
+        paginas_origen = Pagina.objects.filter(formulario_id=formulario).order_by("secuencia")
 
-    # 5) Clonar páginas de esa versión
-    paginas_src = (Pagina.objects
-                   .filter(index_version=ver_src, formulario_id=f_src)
-                   .order_by("secuencia"))
-
-    result_paginas = []
-
-    # Mapa global de campos: old_id_campo (str32) -> new Campo (obj)
-    campo_idmap = {}
-
-    for p in paginas_src:
-        # 5.1 Nueva página en el clon
-        p_new = Pagina.objects.create(
-            id_pagina=uuid.uuid4(),
-            index_version=ver_dst,
-            formulario_id=f_dst,
+    # 4) clonar páginas y su ÚLTIMA versión con sus campos
+    for p in paginas_origen:
+        # 4.1) crear Pagina NUEVA en el clon
+        p_nueva = Pagina.objects.create(
+            index_version=idx_clon,           # versión donde "nace" en el clon
+            formulario_id=clon,
             secuencia=p.secuencia,
             nombre=p.nombre,
             descripcion=p.descripcion,
         )
-        result_paginas.append({"old": str(p.id_pagina), "new": str(p_new.id_pagina)})
 
-        # 5.2 Última versión de la página original
-        p_src_32 = _uuid32_no_dashes(str(p.id_pagina))
-        pv_src = (PaginaVersion.objects
-                  .filter(id_pagina=p_src_32)
-                  .order_by("-fecha_creacion")
-                  .first())
-
-        # 5.3 Crear versión para la nueva página
-        pv_dst = PaginaVersion.objects.create(
-            id_pagina_version=_uuid32_no_dashes(str(uuid.uuid4())),
-            fecha_creacion=pv_src.fecha_creacion if pv_src else timezone.now(),
-            id_pagina=_uuid32_no_dashes(str(p_new.id_pagina)),
+        # 4.2) apuntador vigente de la página del clon
+        Pagina_Index_Version.objects.create(
+            id_pagina=p_nueva,
+            id_index_version=idx_clon,
         )
 
-        # 5.4 Copiar enlaces de campos -> CLONANDO Campo con nuevo id_campo
-        if pv_src:
+        # 4.3) tomar la ÚLTIMA PaginaVersion del original
+        pid32 = _uuid32_no_dashes(str(p.id_pagina))
+        pv_orig = (PaginaVersion.objects
+                   .filter(id_pagina=pid32)
+                   .order_by("-fecha_creacion")
+                   .first())
+
+        # 4.4) crear primera PaginaVersion del clon
+        pv_nueva = PaginaVersion.objects.create(
+            id_pagina_version=uuid32(uuid.uuid4()),
+            id_pagina=_uuid32_no_dashes(str(p_nueva.id_pagina)),
+            fecha_creacion=timezone.now(),
+        )
+
+        if pv_orig:
+            # 4.5) clonar vínculos de campos (clonando CADA campo)
             links = (PaginaCampo.objects
-                     .select_related("id_campo")
-                     .filter(id_pagina_version=pv_src)
+                     .filter(id_pagina_version=pv_orig.id_pagina_version)
                      .order_by("sequence"))
 
-            for lnk in links:
-                old_campo = lnk.id_campo           # instancia Campo
-                old_id = str(old_campo.id_campo)   # char(32)
+            for l in links:
+                c = l.id_campo
+       
 
-                # Si no hemos clonado aún este Campo, lo clonamos
-                if old_id not in campo_idmap:
-                    new_id_campo = _uuid32()  # genera 32 chars (hex sin guiones)
-
-                    # Clonar registro Campo
-                    new_campo = Campo.objects.create(
-                        id_campo=new_id_campo,
-                        tipo=old_campo.tipo,
-                        clase=old_campo.clase,
-                        nombre_campo=old_campo.nombre_campo,
-                        etiqueta=old_campo.etiqueta,
-                        ayuda=old_campo.ayuda,
-                        config=old_campo.config,
-                        requerido=old_campo.requerido,
-                    )
-                    campo_idmap[old_id] = new_campo
-                else:
-                    new_campo = campo_idmap[old_id]
-
-                # Crear relación PaginaCampo a la nueva versión con el NUEVO Campo
-                PaginaCampo.objects.create(
-                    id_campo=new_campo,
-                    id_pagina_version=pv_dst,
-                    sequence=lnk.sequence,
+                c_nuevo = Campo.objects.create(
+                    id_campo=uuid32(uuid.uuid4()),          # <- PK de 32 chars
+                    tipo=c.tipo,
+                    clase=c.clase,
+                    nombre_campo=c.nombre_campo,       # si esto fuera UNIQUE y choca, añade sufijo
+                    etiqueta=c.etiqueta,
+                    ayuda=c.ayuda,
+                    config=c.config,
+                    requerido=c.requerido,
                 )
 
-    return {"formulario_id": str(f_dst.id), "paginas": result_paginas}
+                PaginaCampo.objects.create(
+                    id_pagina_version=pv_nueva,        # <- pasa la INSTANCIA, no el string del id
+                    id_campo=c_nuevo,                  # <- instancia
+                    sequence=l.sequence,
+                )
 
+    return clon
+
+def versionar_pagina_sin_clonar(pagina) -> PaginaVersion:
+    """Crea una nueva PaginaVersion para 'pagina' reutilizando los mismos Campo (no clona)."""
+    pid32 = _uuid32_no_dashes(str(pagina.id_pagina))
+
+    prev = (
+        PaginaVersion.objects
+        .filter(id_pagina=pid32)
+        .order_by('-fecha_creacion')
+        .first()
+    )
+
+    nueva_pv = PaginaVersion.objects.create(
+        id_pagina_version=uuid32(),
+        id_pagina=pid32,
+        fecha_creacion=timezone.now(),
+    )
+
+    if prev:
+        links = (
+            PaginaCampo.objects
+            .filter(id_pagina_version=prev.id_pagina_version)
+            .order_by('sequence')
+        )
+        PaginaCampo.objects.bulk_create([
+            PaginaCampo(
+                id_pagina_version=nueva_pv.id_pagina_version,
+                id_campo=l.id_campo,          # ← MISMO Campo (id_campo estable)
+                sequence=l.sequence
+            )
+            for l in links
+        ])
+
+    return nueva_pv
 # @transaction.atomic
 # def duplicar_formulario_orm(formulario_id) -> dict:
 #     # 1) origen

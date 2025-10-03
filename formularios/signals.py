@@ -2,7 +2,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.db import transaction
 
-from .models import Formulario, FormularioIndexVersion, Formulario_Index_Version, Pagina
+from .models import Formulario, FormularioIndexVersion, Formulario_Index_Version, Pagina, Pagina_Index_Version
 
 from .services import activar_version
 
@@ -13,15 +13,19 @@ def crear_y_activar_version_inicial(sender, instance: Formulario, created, **kwa
         v1 = FormularioIndexVersion.objects.create(formulario_id=instance)
 
         def _despues_commit():
-            # 2) crear página inicial en v1
-            Pagina.objects.create(
+            nueva = Pagina.objects.create(
                 index_version=v1,
                 formulario_id=instance,
                 secuencia=1,
                 nombre="General",
                 descripcion="",
             )
-            # 3) (opcional) actualizar índices/punteros
+            # ✅ AÑADIR: puntero a la versión inicial
+            Pagina_Index_Version.objects.update_or_create(
+                id_pagina=nueva,
+                defaults={"id_index_version": v1},
+            )
+
             activar_version(instance, v1)
 
         # Ejecutar cuando la creación de v1 ya quedó confirmada
