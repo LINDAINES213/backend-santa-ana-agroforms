@@ -1,5 +1,5 @@
 import os
-from .settings import *  # noqa
+from .settings import *
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "test-secret-key")
 DEBUG = True
@@ -15,4 +15,12 @@ CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"
 
 MIGRATION_MODULES = {
     "formularios": None,
+}
+
+# Deshabilitar autenticación y permisos para tests
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
+    ],
 }

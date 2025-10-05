@@ -14,13 +14,16 @@ def api_client():
 
 @pytest.fixture
 def categoria(db):
-    return Categoria.objects.create(nombre="Cat QA", descripcion="Pruebas")
+    return Categoria.objects.create(
+        nombre="Campo",
+        descripcion=""
+    )
 
 @pytest.fixture
 def formulario(db, categoria):
     return Formulario.objects.create(
         categoria=categoria,
-        nombre="Campo",
+        nombre="Formulario",
         descripcion="",
         permitir_fotos=False,
         permitir_gps=False,
@@ -34,4 +37,4 @@ def formulario(db, categoria):
 
 @pytest.fixture
 def version(db, formulario):
-    return FormularioIndexVersion.objects.create(formulario=formulario)
+    return FormularioIndexVersion.objects.create(formulario_id=formulario)
