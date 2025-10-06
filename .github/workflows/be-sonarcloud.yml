@@ -26,7 +26,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           pip install pytest pytest-cov
-          pytest --cov=src --cov-report=xml:coverage.xml --cov-report=term
+          pytest --cov=backend --cov=formularios --cov-report=xml:coverage.xml --cov-report=term
       
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@master
@@ -36,6 +36,6 @@ jobs:
           args: >
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY_BE }}
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.sources=src
+            -Dsonar.sources=backend,formularios
             -Dsonar.python.coverage.reportPaths=coverage.xml
-            -Dsonar.exclusions=**/tests/**,**/__pycache__/**,**/migrations/**
+            -Dsonar.exclusions=**/tests/**,**/__pycache__/**,**/migrations/**,**/migraciones/**,**/venv/**,**/.pytest_cache/**,**/.scannerwork/**

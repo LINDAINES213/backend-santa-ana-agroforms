@@ -1,0 +1,14 @@
+version: v1.28.0
+ignore:
+  SNYK-PYTHON-DJANGO-10074036:
+    - '*':
+        reason: Django 5.0.14 es la ultima version compatible con mssql-django
+        expires: 2026-12-31T00:00:00.000Z
+  SNYK-PYTHON-DJANGO-10302884:
+    - '*':
+        reason: Django 5.0.14 es la ultima version compatible con mssql-django
+        expires: 2026-12-31T00:00:00.000Z
+  SNYK-PYTHON-DJANGO-12485156:
+    - '*':
+        reason: Django 5.0.14 es la ultima version compatible con mssql-django
+        expires: 2026-12-31T00:00:00.000Z
