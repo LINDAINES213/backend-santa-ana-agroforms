@@ -136,7 +136,6 @@ class UserFormulario(models.Model):
 class FormularioIndexVersion(models.Model):
     id_index_version = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
-    # antes: formulario_id = models.ForeignKey(Formulario, on_delete=models.CASCADE)
     
     formulario_id = models.ForeignKey(
         Formulario,
@@ -150,7 +149,6 @@ class FormularioIndexVersion(models.Model):
         db_table = "formularios_formularioindexversion" 
 
 class Formulario_Index_Version(models.Model):
-    # PK = id_index_version para permitir muchas filas por id_formulario
     id_index_version = models.OneToOneField(
         FormularioIndexVersion,
         on_delete=models.CASCADE,
@@ -174,11 +172,10 @@ class Pagina(models.Model):
     index_version = models.ForeignKey(
         FormularioIndexVersion, on_delete=models.CASCADE, related_name="paginas"
     )
-    # antes: formulario_id = models.ForeignKey(Formulario, on_delete=models.CASCADE, related_name="paginas")
     formulario_id = models.ForeignKey(
         Formulario,
         on_delete=models.CASCADE,
-        db_column='formulario_id',   # <-- mapea al nombre físico correcto
+        db_column='formulario_id',   
         related_name="paginas"
     )
     secuencia = models.PositiveIntegerField(default=1)
@@ -190,9 +187,7 @@ class Pagina(models.Model):
         # managed = False
         db_table = "formularios_pagina"
 
-# === Puntero: qué versión de formulario "contiene" cada página ===
 class Pagina_Index_Version(models.Model):
-    # Una fila por página (puntero ACTUAL). Copiamos ids a la nueva versión.
     id_pagina = models.OneToOneField(
         "formularios.Pagina",
         on_delete=models.CASCADE,
@@ -212,7 +207,6 @@ class Pagina_Index_Version(models.Model):
         db_table = "formularios_pagina_index_version"
 
 
-# === Historial de versiones por página (fecha de cambio) ===
 class PaginaVersion(models.Model):
     id_pagina_version = models.CharField(primary_key=True, max_length=32, db_column="id_pagina_version")
     fecha_creacion = models.DateTimeField(db_column="fecha_creacion")
@@ -248,7 +242,6 @@ class Campo(models.Model):
 
 
 class PaginaCampo(models.Model):
-    # hack: usamos id_campo como pk a nivel ORM (la tabla real tiene pk compuesta)
     id_campo = models.ForeignKey(
         Campo, on_delete=models.CASCADE, db_column="id_campo",
         related_name="enlaces_pagina", primary_key=True
@@ -284,3 +277,37 @@ class FuenteDatos(models.Model):
 
     def __str__(self):
         return self.nombre
+
+class Grupo(models.Model):
+    id_grupo = models.CharField(primary_key=True, max_length=64, db_column="id_grupo")
+    id_campo_group = models.OneToOneField(
+        Campo,
+        on_delete=models.CASCADE,
+        db_column="id_campo_group",
+        related_name="grupo"
+    )
+    nombre = models.CharField(max_length=150, db_column="nombre")
+
+    class Meta:
+        db_table = "formularios_grupo"
+
+    def __str__(self):
+        return f"{self.nombre} ({self.id_grupo})"
+
+class CampoGrupo(models.Model):
+    id_grupo = models.ForeignKey(
+        Grupo,
+        on_delete=models.CASCADE,
+        db_column="id_grupo",
+        related_name="miembros"
+    )
+    id_campo = models.ForeignKey(
+        Campo,
+        on_delete=models.CASCADE,
+        db_column="id_campo",
+        related_name="grupos"
+    )
+
+    class Meta:
+        db_table = "formularios_campo_grupo"
+        unique_together = (("id_grupo", "id_campo"),)

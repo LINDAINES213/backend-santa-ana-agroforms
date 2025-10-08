@@ -2,12 +2,19 @@ from .services import _uuid32_no_dashes, hash_password, uuid32
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
+from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
 # from .validators import validate_config_against_schema
 from django.db import connection
 from rest_framework.validators import UniqueValidator
 import uuid
 
+class GrupoSerializer(serializers.ModelSerializer):
+    # devolver solo el id del campo-group (no el objeto completo)
+    id_campo_group = serializers.CharField(source="id_campo_group_id", read_only=True)
+
+    class Meta:
+        model = Grupo
+        fields = ("id_grupo", "nombre", "id_campo_group")
 
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -144,6 +151,7 @@ class CrearCampoEnPaginaSerializer(serializers.Serializer):
     requerido = serializers.BooleanField(required=False)
     config = serializers.JSONField(required=False)     # se valida con isjson() en la BD
     sequence = serializers.IntegerField(required=False, min_value=1)  # posición opcional
+    
 
 class PaginaConCamposSerializer(PaginaSerializer):
     campos = serializers.SerializerMethodField()
@@ -152,7 +160,7 @@ class PaginaConCamposSerializer(PaginaSerializer):
         fields = PaginaSerializer.Meta.fields + ("campos",)
 
     def get_campos(self, obj):
-        # 1) normalizar id_pagina a 32 sin guiones (la tabla usa char(32))
+        # 1) normalizar id_pagina a 32 sin guiones
         try:
             id_pagina_32 = _uuid32_no_dashes(str(obj.id_pagina))
         except Exception:
@@ -160,22 +168,42 @@ class PaginaConCamposSerializer(PaginaSerializer):
 
         # 2) última versión de esa página
         pv = (PaginaVersion.objects
-              .filter(id_pagina=id_pagina_32)
-              .order_by("-fecha_creacion")
-              .first())
+            .filter(id_pagina=id_pagina_32)
+            .order_by("-fecha_creacion")
+            .first())
         if not pv:
             return []
 
         # 3) enlaces de esa versión → campos
         links = (PaginaCampo.objects
-                 .filter(id_pagina_version=pv.id_pagina_version)
-                 .select_related("id_campo")
-                 .order_by("sequence"))
+                .filter(id_pagina_version=pv.id_pagina_version)
+                .select_related("id_campo")
+                .order_by("sequence"))
 
+        import json
+        from .models import Grupo, CampoGrupo
+
+        def _first(x):
+            return (x[0] if isinstance(x, (list, tuple)) and x else x)
+
+        def _cfg_dict(cfg):
+            if isinstance(cfg, dict):
+                return cfg
+            if isinstance(cfg, str):
+                try:
+                    return json.loads(cfg)
+                except Exception:
+                    return {}
+            return {}
+
+        # 4) construir salida plana + índices
         out = []
+        index = {}           # id_campo -> dict en out
+        seq_by_campo = {}    # id_campo -> sequence en página
         for l in links:
-            c: Campo = l.id_campo
-            out.append({
+            c = l.id_campo
+            cfg = _cfg_dict(c.config)
+            d = {
                 "id_campo": str(c.id_campo),
                 "sequence": l.sequence,
                 "nombre_campo": c.nombre_campo,
@@ -183,9 +211,45 @@ class PaginaConCamposSerializer(PaginaSerializer):
                 "clase": c.clase,
                 "tipo": c.tipo,
                 "requerido": c.requerido,
-                "config": c.config,
-            })
-        return out
+                "config": cfg,
+            }
+            out.append(d)
+            index[d["id_campo"]] = d
+            seq_by_campo[d["id_campo"]] = l.sequence
+
+        # 5) anidar hijos en cada group y recolectar ids que van DENTRO de grupos
+        child_ids = set()
+        for d in out:
+            if (d.get("clase") or "").lower() != "group":
+                continue
+
+            gid = _first((d.get("config") or {}).get("id_group"))
+            if not gid:
+                d["children"] = []
+                continue
+
+            try:
+                g = Grupo.objects.get(pk=gid)
+            except Grupo.DoesNotExist:
+                d["children"] = []
+                continue
+
+            miembros = (CampoGrupo.objects
+                        .filter(id_grupo=g)
+                        .values_list("id_campo_id", flat=True))
+
+            hijos = [index[cid] for cid in miembros if cid in index]
+            hijos.sort(key=lambda h: seq_by_campo.get(h["id_campo"], 10**9))
+            d["children"] = hijos
+
+            # marcar estos campos para NO mostrarlos al nivel raíz
+            child_ids.update([h["id_campo"] for h in hijos])
+
+        # 6) devolver solo: todos los groups + los campos que NO estén en child_ids
+        top_level = [d for d in out if (d.get("clase","").lower()=="group") or (d["id_campo"] not in child_ids)]
+        # mantener orden por sequence (ya viene ordenado), pero reordenamos por seguridad
+        top_level.sort(key=lambda d: seq_by_campo.get(d["id_campo"], 10**9))
+        return top_level
 
 
 class FormularioSerializer(serializers.ModelSerializer):

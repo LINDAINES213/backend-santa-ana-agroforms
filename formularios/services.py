@@ -15,6 +15,7 @@ from os import urandom
 from .models import (
     Formulario,
     FormularioIndexVersion,
+    Grupo,
     Pagina,
     PaginaVersion,
     ClaseCampo,
@@ -40,6 +41,15 @@ def uuid32(u) -> str:
     # acepta uuid.UUID o str
     s = str(u)
     return s.replace("-", "").lower()  # 32 chars
+
+def _first_or_same(x):
+    # tu config viene como listas de strings: ["string"]
+    if isinstance(x, (list, tuple)) and x:
+        return x[0]
+    return x
+
+def _ensure_str_uuid():
+    return uuid.uuid4().hex  # 32 chars; si prefieres con guiones: str(uuid.uuid4())
 
 
 @transaction.atomic
@@ -287,16 +297,69 @@ def crear_campo_en_pagina(id_pagina: str, payload: dict) -> dict:
 
     # 1) crear registro en formularios_campo
     id_campo = _uuid32()
-    Campo.objects.create(
+    # Campo.objects.create(
+    #     id_campo=id_campo,
+    #     tipo=tipo,
+    #     clase=clase,
+    #     nombre_campo=nombre_campo,
+    #     etiqueta=etiqueta,
+    #     ayuda=ayuda,
+    #     config=cfg,
+    #     requerido=requerido,
+    # )
+
+    campo = Campo.objects.create(
         id_campo=id_campo,
         tipo=tipo,
         clase=clase,
         nombre_campo=nombre_campo,
         etiqueta=etiqueta,
         ayuda=ayuda,
-        config=cfg,
+        config=cfg,          # dict o JSON ya normalizado
         requerido=requerido,
     )
+
+    # === NUEVO: si es 'group', registrar/actualizar Grupo usando config ===
+    if (clase or "").lower() == "group":
+        # cfg puede ser dict o string JSON
+        cfg_dict = {}
+        if isinstance(cfg, dict):
+            cfg_dict = cfg
+        elif isinstance(cfg, str):
+            try:
+                cfg_dict = json.loads(cfg)
+            except Exception:
+                cfg_dict = {}
+
+        # leer de config (aceptando listas como ["string"])
+        id_group = _first_or_same(cfg_dict.get("id_group"))
+        name     = _first_or_same(cfg_dict.get("name"))
+        desc     = _first_or_same(cfg_dict.get("fieldCondition"))  # si quieres
+
+        # si no viene id_group, lo generamos y lo devolvemos guardado en config
+        if not id_group:
+            id_group = _ensure_str_uuid()
+            cfg_dict["id_group"] = id_group
+        if not name:
+            name = (etiqueta or nombre_campo or "Grupo")[:150]
+            cfg_dict["name"] = name
+
+        # persistir config “de vuelta” en el Campo si lo modificamos
+        if isinstance(campo.config, dict):
+            campo.config.update(cfg_dict)
+            campo.save(update_fields=["config"])
+        else:
+            campo.config = json.dumps(cfg_dict, ensure_ascii=False)
+            campo.save(update_fields=["config"])
+
+        # upsert en formularios_grupo
+        Grupo.objects.update_or_create(
+            id_grupo=id_group,
+            defaults={
+                "id_campo_group": campo,
+                "nombre": name,
+            }
+        )
 
     # 2) obtener o crear versión de página
     pv = _pagina_version_actual_o_nueva(id_pagina)

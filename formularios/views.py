@@ -4,18 +4,21 @@ from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
 from django.db import models, connection
-from .models import Campo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
+from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
 from django.shortcuts import get_object_or_404
-from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer
+from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer
 from django.http import HttpResponse
 from django.utils import timezone
 import uuid
+from django.db.models import Q
+
 
 from .azure_storage import AzureBlobStorageService
 from .models import FuenteDatos
 from .serializers import FuenteDatosSerializer, FuenteDatosCreateSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 from . import services
+from rest_framework import serializers as drf_serializers
 
 
 
@@ -205,6 +208,44 @@ class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
         ser = CrearCampoEnPaginaSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         out = crear_campo_en_pagina(id32, ser.validated_data)
+
+        # 2) Si te mandaron un grupo, enlaza automáticamente el campo al grupo
+        gid = request.data.get("grupo") or request.data.get("id_grupo")
+
+        # fallback: si venía dentro de config (id_group)
+        if not gid:
+            cfg = ser.validated_data.get("config") or {}
+            if isinstance(cfg, str):
+                import json
+                try:
+                    cfg = json.loads(cfg)
+                except Exception:
+                    cfg = {}
+            v = cfg.get("id_group")
+            if isinstance(v, (list, tuple)) and v:
+                gid = v[0]
+            elif isinstance(v, str):
+                gid = v
+
+        if gid:
+            try:
+                g = Grupo.objects.get(pk=str(gid))
+            except Grupo.DoesNotExist:
+                return Response(
+                    {"detail": f"El grupo '{gid}' no existe. Crea primero el campo de clase 'group' que lo define."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # ‘out’ puede traer "id_campo" (versión A) o "campo_id" (versión B) según tu services.py
+            campo_id = out.get("id_campo") or out.get("campo_id")
+            if not campo_id:
+                return Response({"detail": "No se pudo resolver id_campo creado."}, status=500)
+
+            CampoGrupo.objects.get_or_create(
+                id_grupo=g,
+                id_campo_id=str(campo_id)  # Campo.id_campo es char(32) en tu modelo
+            )
+
         return Response(out, status=status.HTTP_201_CREATED)
     
 class FormularioListViewSet(viewsets.ModelViewSet):
@@ -421,3 +462,75 @@ class CampoViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["nombre_campo", "etiqueta", "clase", "tipo"]
     ordering_fields = ["nombre_campo", "tipo", "clase", "etiqueta"]
+
+class GrupoViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Grupo.objects.all().order_by("nombre")
+    serializer_class = type("GrupoSerializer", (drf_serializers.ModelSerializer,), {
+        "Meta": type("Meta", (), {"model": Grupo, "fields": ("id_grupo","nombre","id_campo_group")})
+    })
+
+    @action(detail=True, methods=["get","post"], url_path="campos")
+    def campos(self, request, pk=None):
+        grupo = self.get_object()
+        if request.method.lower() == "get":
+            rows = (CampoGrupo.objects
+                    .filter(id_grupo=grupo)
+                    .select_related("id_campo")
+                    .order_by("sequence","id_campo_id"))
+            data = [{"id_campo": r.id_campo_id,
+                     "sequence": r.sequence,
+                     "etiqueta": r.id_campo.etiqueta,
+                     "clase": r.id_campo.clase,
+                     "tipo": r.id_campo.tipo} for r in rows]
+            return Response(data, 200)
+
+        id_campo = request.data.get("id_campo")
+        seq = request.data.get("sequence")
+        if seq is None:
+            mx = CampoGrupo.objects.filter(id_grupo=grupo).aggregate(models.Max("sequence"))["sequence__max"] or 0
+            seq = mx + 1
+        obj, created = CampoGrupo.objects.get_or_create(
+            id_grupo=grupo, id_campo_id=id_campo, defaults={"sequence": seq}
+        )
+        if not created:
+            obj.sequence = seq
+            obj.save(update_fields=["sequence"])
+        return Response({"ok": True, "id_grupo": grupo.pk, "id_campo": id_campo, "sequence": seq}, 201)
+
+
+class GrupoViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Grupo.objects.all().order_by("nombre")
+    serializer_class = GrupoSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        q = self.request.query_params.get("q")
+        pagina = self.request.query_params.get("pagina")  # UUID con o sin guiones o char(32)
+
+        if q:
+            qs = qs.filter(Q(nombre__icontains=q) | Q(id_grupo__icontains=q))
+
+        if pagina:
+            try:
+                id32 = _uuid32_no_dashes(pagina)
+            except Exception:
+                return qs.none()
+            pv = (PaginaVersion.objects
+                  .filter(id_pagina=id32)
+                  .order_by("-fecha_creacion")
+                  .first())
+            if not pv:
+                return qs.none()
+            # solo grupos cuyos CAMPOS group estén en la página (última versión)
+            campo_group_ids = (PaginaCampo.objects
+                               .filter(id_pagina_version=pv.id_pagina_version,
+                                       id_campo__clase__iexact="group")
+                               .values_list("id_campo", flat=True))
+            qs = qs.filter(id_campo_group_id__in=list(campo_group_ids))
+        return qs
+
+    # endpoint liviano para “combos”
+    @action(detail=False, methods=["get"], url_path="select")
+    def select(self, request):
+        qs = self.get_queryset()[:50]  # limita resultados
+        return Response([{"value": g.id_grupo, "label": g.nombre} for g in qs])
