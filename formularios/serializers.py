@@ -1,3 +1,4 @@
+import json
 from .services import _uuid32_no_dashes, hash_password, uuid32
 from rest_framework import serializers
 from rest_framework.response import Response
@@ -314,6 +315,29 @@ class UsuarioCreateSerializer(serializers.ModelSerializer):
         user = Usuario.objects.create(**validated)
         return user
 
+class UsuarioUpdateSerializer(serializers.ModelSerializer):
+    # password opcional y write-only: si viene, la seteamos correctamente
+    password = serializers.CharField(write_only=True, required=False, min_length=8, style={"input_type": "password"})
+
+    class Meta:
+        model = Usuario
+        fields = ("nombre", "correo", "activo", "acceso_web", "password")
+        extra_kwargs = {
+            "correo": {"required": False},
+            "nombre": {"required": False},
+            "activo": {"required": False},
+            "acceso_web": {"required": False},
+        }
+
+    def update(self, instance, validated):
+        pwd = validated.pop("password", None)
+        for k, v in validated.items():
+            setattr(instance, k, v)
+        if pwd:
+            instance.set_password(pwd)  # usa tu hash Argon2
+        instance.save()
+        return instance
+
 
 class CampoSerializer(serializers.ModelSerializer):
     class Meta:
@@ -321,3 +345,97 @@ class CampoSerializer(serializers.ModelSerializer):
         fields = ("id_campo", "tipo", "clase", "nombre_campo",
                   "etiqueta", "ayuda", "config", "requerido")
    
+class PaginaUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Pagina
+        fields = ("nombre", "descripcion", "secuencia")
+        extra_kwargs = {k: {"required": False} for k in fields}
+
+# serializers.py
+from rest_framework import serializers
+import json
+
+class CampoUpdateSerializer(serializers.ModelSerializer):
+    # Acepta dict JSON en la entrada
+    config = serializers.JSONField(required=False)
+
+    class Meta:
+        model = Campo
+        fields = ("etiqueta", "ayuda", "requerido", "config")
+        extra_kwargs = {k: {"required": False} for k in fields}
+
+    def _deep_merge(self, base: dict, patch: dict) -> dict:
+        for k, v in patch.items():
+            if isinstance(v, dict) and isinstance(base.get(k), dict):
+                base[k] = self._deep_merge(base[k], v)
+            else:
+                base[k] = v
+        return base
+
+    def update(self, instance, validated):
+        cfg_patch = validated.pop("config", None)
+
+        # Actualiza los demás campos de forma parcial
+        for k, v in validated.items():
+            setattr(instance, k, v)
+
+        if cfg_patch is not None:
+            # ¿reemplazar toda la config? (si pasas ?replace_config=1|true)
+            request = self.context.get("request")
+            replace_all = False
+            if request:
+                q = request.query_params
+                replace_all = (q.get("replace_config") or "").lower() in ("1", "true", "yes")
+
+            # Config actual (string JSON en BD) -> dict
+            try:
+                current = json.loads(instance.config) if instance.config else {}
+            except Exception:
+                current = {}
+
+            if replace_all:
+                merged = cfg_patch or {}
+            else:
+                if not isinstance(cfg_patch, dict):
+                    raise serializers.ValidationError({"config": "Debe ser un objeto JSON"})
+                merged = self._deep_merge(current if isinstance(current, dict) else {}, cfg_patch)
+
+            # Guardamos como string JSON
+            instance.config = json.dumps(merged, ensure_ascii=False)
+
+        instance.save()
+        return instance
+
+class PaginaUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Pagina
+        fields = ("nombre", "descripcion", "secuencia")  # manda solo lo que cambies
+        extra_kwargs = {k: {"required": False} for k in ("nombre","descripcion","secuencia")}
+
+class FormularioUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Formulario
+        fields = (
+            "categoria",              # FK (UUID) si aplica
+            "nombre",
+            "descripcion",
+            "permitir_fotos",
+            "permitir_gps",
+            "disponible_desde_fecha", # Date (YYYY-MM-DD)
+            "disponible_hasta_fecha", # Date (YYYY-MM-DD)
+            "estado",                 # p.ej. "Activa"
+            "forma_envio",            # p.ej. "En Linea/fuera Linea"
+            "es_publico",
+            "auto_envio",
+        )
+        extra_kwargs = {f: {"required": False} for f in fields}
+
+    def validate(self, attrs):
+        # Validar rango de fechas si vienen ambas
+        d = attrs.get("disponible_desde_fecha")
+        h = attrs.get("disponible_hasta_fecha")
+        if d and h and d > h:
+            raise serializers.ValidationError(
+                {"disponible_hasta_fecha": "Debe ser >= disponible_desde_fecha"}
+            )
+        return attrs

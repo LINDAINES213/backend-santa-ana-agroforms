@@ -6,11 +6,13 @@ from rest_framework.response import Response
 from django.db import models, connection
 from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
 from django.shortcuts import get_object_or_404
-from .serializers import CampoSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, PaginaConCamposSerializer, PaginaSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer
+from .serializers import CampoSerializer, CampoUpdateSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, FormularioUpdateSerializer, PaginaConCamposSerializer, PaginaSerializer, PaginaUpdateSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer, UsuarioUpdateSerializer
 from django.http import HttpResponse
 from django.utils import timezone
 import uuid
 from django.db.models import Q
+from rest_framework import mixins
+
 
 
 from .azure_storage import AzureBlobStorageService
@@ -19,6 +21,8 @@ from .serializers import FuenteDatosSerializer, FuenteDatosCreateSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 from . import services
 from rest_framework import serializers as drf_serializers
+from django.db.models.deletion import ProtectedError
+
 
 
 
@@ -177,19 +181,46 @@ def home(request):
     return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
 
 class CategoriaViewSet(viewsets.ModelViewSet):
-    queryset = Categoria.objects.all()
+    queryset = Categoria.objects.all().order_by("nombre")
     serializer_class = CategoriaSerializer
+    lookup_field = "id"
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        # Bloquear explícitamente si hay formularios que usan esta categoría
+        if Formulario.objects.filter(categoria=instance).exists():
+            return Response(
+                {"detail": "No se puede eliminar: hay formularios que usan esta categoría."},
+                status=status.HTTP_409_CONFLICT
+            )
+        return super().destroy(request, *args, **kwargs)
     
-class PaginaViewSet(viewsets.ReadOnlyModelViewSet):
+class PaginaViewSet(mixins.UpdateModelMixin,
+                    mixins.RetrieveModelMixin,
+                    mixins.ListModelMixin,
+                    viewsets.GenericViewSet):
     """
     /api/paginas/                       -> lista páginas
     /api/paginas/{id_pagina}/           -> detalle (agrega ?include_campos=1 para devolver campos)
     /api/paginas/{id_pagina}/campos/    -> GET: solo los campos
     /api/paginas/{id_pagina}/agregar-campo/ -> POST: crear campo en esa página
+
     """
+    def get_serializer_class(self):
+        if self.action in ("partial_update", "update"):
+            return PaginaUpdateSerializer
+        if self.action == "retrieve" and self.request.query_params.get("include_campos") in ("1", "true", "True"):
+            return PaginaConCamposSerializer
+        return PaginaSerializer
+
     queryset = Pagina.objects.all().order_by("secuencia")
     serializer_class = PaginaSerializer
     lookup_field = "id_pagina"
+
+    def get_serializer_class(self):
+        if self.action in ("partial_update", "update"):
+            return PaginaUpdateSerializer
+        return PaginaSerializer
 
     def retrieve(self, request, *args, **kwargs):
         if request.query_params.get("include_campos") in ("1", "true", "True"):
@@ -279,10 +310,18 @@ class FormularioListViewSet(viewsets.ModelViewSet):
             return FormularioListSerializer
         return FormularioSerializer
 
-class FormularioViewSet(viewsets.ModelViewSet):
+class FormularioViewSet(mixins.UpdateModelMixin,
+                        mixins.RetrieveModelMixin,
+                        mixins.ListModelMixin,
+                        viewsets.GenericViewSet):
     queryset = Formulario.objects.all()
     serializer_class = FormularioSerializer
     lookup_field = "id"
+
+    def get_serializer_class(self):
+        if self.action in ("partial_update", "update"):
+            return FormularioUpdateSerializer
+        return FormularioSerializer
 
     @action(detail=True, methods=["post"], url_path="duplicar")
     def duplicar(self, request, *args, **kwargs):
@@ -432,11 +471,13 @@ class FormularioViewSet(viewsets.ModelViewSet):
 class UsuarioViewSet(viewsets.ModelViewSet):
     queryset = Usuario.objects.all().order_by("nombre")
     lookup_field = "nombre_usuario"   # clave
-    serializer_class = UsuarioDetalleSerializer
+    # serializer_class = UsuarioDetalleSerializer
 
     def get_serializer_class(self):
         if self.action == "create":
             return UsuarioCreateSerializer
+        if self.action in ("partial_update", "update"):
+            return UsuarioUpdateSerializer
         return UsuarioDetalleSerializer
 
     # @action(detail=True, methods=["put"], url_path="roles")
@@ -448,7 +489,10 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     #     return Response(UsuarioDetalleSerializer(user, context=self.get_serializer_context()).data, status=status.HTTP_200_OK)
 
 
-class CampoViewSet(viewsets.ReadOnlyModelViewSet):
+class CampoViewSet(mixins.UpdateModelMixin,
+                   mixins.RetrieveModelMixin,
+                   mixins.ListModelMixin,
+                   viewsets.GenericViewSet):
     """
     GET /api/campos/          -> todos los campos (paginado)
     GET /api/campos/{id}/     -> detalle de un campo
@@ -457,13 +501,21 @@ class CampoViewSet(viewsets.ReadOnlyModelViewSet):
       ?ordering=nombre_campo  (o -nombre_campo, tipo, clase, etiqueta)
     """
     queryset = Campo.objects.all().order_by("nombre_campo")
-    serializer_class = CampoSerializer
+    # serializer_class = CampoSerializer
     lookup_field = "id_campo"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["nombre_campo", "etiqueta", "clase", "tipo"]
     ordering_fields = ["nombre_campo", "tipo", "clase", "etiqueta"]
 
-class GrupoViewSet(viewsets.ReadOnlyModelViewSet):
+    def get_serializer_class(self):
+        if self.action in ("partial_update", "update"):
+            return CampoUpdateSerializer
+        return CampoSerializer
+
+class GrupoViewSet(mixins.UpdateModelMixin,
+                   mixins.RetrieveModelMixin,
+                   mixins.ListModelMixin,
+                   viewsets.GenericViewSet):
     queryset = Grupo.objects.all().order_by("nombre")
     serializer_class = type("GrupoSerializer", (drf_serializers.ModelSerializer,), {
         "Meta": type("Meta", (), {"model": Grupo, "fields": ("id_grupo","nombre","id_campo_group")})
