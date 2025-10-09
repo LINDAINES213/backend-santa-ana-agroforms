@@ -17,14 +17,14 @@ jobs:
         with:
           fetch-depth: 0  # Necesario para escanear todo el historial de git
 
-      - name: TruffleHog OSS
+      - name: TruffleHog
         uses: trufflesecurity/trufflehog@main
         with:
           # Escanea todo el repositorio incluyendo historial
           path: ./
           base: ${{ github.event.repository.default_branch }}
           head: HEAD
-          extra_args: --only-verified --fail --json --exclude-paths=.trufflehogignore
+          extra_args: --only-verified --exclude-paths=.trufflehogignore
 
       - name: Exportar reporte JSON (filesystem)
         if: ${{ always() }}
