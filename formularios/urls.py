@@ -2,7 +2,7 @@ from ntpath import basename
 from django.urls import path, include
 from formularios import auth_views
 from rest_framework.routers import DefaultRouter
-from .views import CategoriaViewSet, FormularioViewSet, FuenteDatosViewSet, GrupoViewSet, PaginaViewSet, UsuarioViewSet, CampoViewSet, FormularioListViewSet
+from .views import AsignacionViewSet, CategoriaViewSet, FormularioViewSet, FuenteDatosViewSet, GrupoViewSet, PaginaViewSet, UsuarioViewSet, CampoViewSet, FormularioListViewSet
 
 router = DefaultRouter()
 router.register(r'formularios', FormularioViewSet, basename='formulario')
@@ -13,6 +13,8 @@ router.register(r"campos",  CampoViewSet,  basename="campos")
 router.register(r"formularios-lite", FormularioListViewSet, basename="formularios-lite")
 router.register(r'fuentes-datos', FuenteDatosViewSet, basename='fuente-datos')
 router.register(r'grupos', GrupoViewSet, basename='grupos')
+router.register(r"asignaciones", AsignacionViewSet, basename="asignacion")
+
 
 
 

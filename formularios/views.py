@@ -4,9 +4,9 @@ from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
 from django.db import models, connection
-from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
+from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
 from django.shortcuts import get_object_or_404
-from .serializers import CampoSerializer, CampoUpdateSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioSerializer, FormularioUpdateSerializer, PaginaConCamposSerializer, PaginaSerializer, PaginaUpdateSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer, UsuarioUpdateSerializer
+from .serializers import AsignacionBulkSerializer, CampoSerializer, CampoUpdateSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioLiteSerializer, FormularioSerializer, FormularioUpdateSerializer, PaginaConCamposSerializer, PaginaSerializer, PaginaUpdateSerializer, UserFormularioSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer, UsuarioLiteSerializer, UsuarioUpdateSerializer
 from django.http import HttpResponse
 from django.utils import timezone
 import uuid
@@ -195,10 +195,7 @@ class CategoriaViewSet(viewsets.ModelViewSet):
             )
         return super().destroy(request, *args, **kwargs)
     
-class PaginaViewSet(mixins.UpdateModelMixin,
-                    mixins.RetrieveModelMixin,
-                    mixins.ListModelMixin,
-                    viewsets.GenericViewSet):
+class PaginaViewSet(viewsets.ModelViewSet):
     """
     /api/paginas/                       -> lista páginas
     /api/paginas/{id_pagina}/           -> detalle (agrega ?include_campos=1 para devolver campos)
@@ -310,18 +307,17 @@ class FormularioListViewSet(viewsets.ModelViewSet):
             return FormularioListSerializer
         return FormularioSerializer
 
-class FormularioViewSet(mixins.UpdateModelMixin,
-                        mixins.RetrieveModelMixin,
-                        mixins.ListModelMixin,
-                        viewsets.GenericViewSet):
+class FormularioViewSet(viewsets.ModelViewSet):
     queryset = Formulario.objects.all()
     serializer_class = FormularioSerializer
     lookup_field = "id"
 
     def get_serializer_class(self):
+        if self.action == "list":
+            return FormularioSerializer
         if self.action in ("partial_update", "update"):
             return FormularioUpdateSerializer
-        return FormularioSerializer
+        return FormularioSerializer  # create / retrieve
 
     @action(detail=True, methods=["post"], url_path="duplicar")
     def duplicar(self, request, *args, **kwargs):
@@ -489,10 +485,7 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     #     return Response(UsuarioDetalleSerializer(user, context=self.get_serializer_context()).data, status=status.HTTP_200_OK)
 
 
-class CampoViewSet(mixins.UpdateModelMixin,
-                   mixins.RetrieveModelMixin,
-                   mixins.ListModelMixin,
-                   viewsets.GenericViewSet):
+class CampoViewSet(viewsets.ModelViewSet):
     """
     GET /api/campos/          -> todos los campos (paginado)
     GET /api/campos/{id}/     -> detalle de un campo
@@ -512,10 +505,7 @@ class CampoViewSet(mixins.UpdateModelMixin,
             return CampoUpdateSerializer
         return CampoSerializer
 
-class GrupoViewSet(mixins.UpdateModelMixin,
-                   mixins.RetrieveModelMixin,
-                   mixins.ListModelMixin,
-                   viewsets.GenericViewSet):
+class GrupoViewSet(viewsets.ModelViewSet):
     queryset = Grupo.objects.all().order_by("nombre")
     serializer_class = type("GrupoSerializer", (drf_serializers.ModelSerializer,), {
         "Meta": type("Meta", (), {"model": Grupo, "fields": ("id_grupo","nombre","id_campo_group")})
@@ -586,3 +576,128 @@ class GrupoViewSet(viewsets.ReadOnlyModelViewSet):
     def select(self, request):
         qs = self.get_queryset()[:50]  # limita resultados
         return Response([{"value": g.id_grupo, "label": g.nombre} for g in qs])
+
+class AsignacionViewSet(viewsets.ModelViewSet):
+    """
+    Rutas:
+      GET    /api/asignaciones/                  -> lista TODAS las asignaciones
+      POST   /api/asignaciones/crear-asignacion/              -> asignar a un usuario formularios (dropdown+multiselect)
+      GET    /api/asignaciones/opciones          -> opciones para dropdowns (usuarios + formularios)
+      DELETE /api/asignaciones/{id}/             -> elimina una asignación puntual
+    """
+    serializer_class = UserFormularioSerializer
+    queryset = (UserFormulario.objects
+                .select_related("id_usuario", "id_formulario", "id_formulario__categoria")
+                .all())
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = [
+        "id_usuario__nombre_usuario",
+        "id_usuario__nombre",
+        "id_formulario__nombre",
+        "id_formulario__categoria__nombre",
+    ]
+    ordering_fields = ["id", "id_usuario__nombre_usuario", "id_formulario__nombre"]
+    ordering = ["id"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        p = self.request.query_params
+
+        usuario = p.get("usuario")
+        if usuario:
+            qs = qs.filter(id_usuario__nombre_usuario__iexact=usuario)
+
+        id_usuario = p.get("id_usuario")
+        if id_usuario:
+            # si decides seguir aceptando este parámetro, que también sea nombre_usuario:
+            qs = qs.filter(id_usuario__nombre_usuario__iexact=id_usuario)
+
+        form = p.get("form") or p.get("id_formulario")
+        if form:
+            qs = qs.filter(id_formulario__id=form)
+
+        categoria = p.get("categoria")
+        if categoria:
+            qs = qs.filter(id_formulario__categoria__id=categoria)
+
+        categoria_nombre = p.get("categoria_nombre")
+        if categoria_nombre:
+            qs = qs.filter(id_formulario__categoria__nombre__icontains=categoria_nombre)
+
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="opciones")
+    def opciones(self, request):
+        """
+        Devuelve listas para poblar dropdowns:
+         - usuarios: top N (filtrables por ?q_user=)
+         - formularios: top M (filtrables por ?q_form=, ?categoria=)
+        """
+        q_user = request.query_params.get("q_user", "")
+        q_form = request.query_params.get("q_form", "")
+        categoria = request.query_params.get("categoria")
+        limit_users = int(request.query_params.get("limit_users", 20))
+        limit_forms = int(request.query_params.get("limit_forms", 20))
+
+        users_qs = Usuario.objects.all()
+        if q_user:
+            users_qs = users_qs.filter(
+                models.Q(nombre_usuario__icontains=q_user) |
+                models.Q(nombre__icontains=q_user)
+            )
+        users = UsuarioLiteSerializer(users_qs.order_by("nombre")[:limit_users], many=True).data
+
+        forms_qs = Formulario.objects.select_related("categoria").all()
+        if q_form:
+            forms_qs = forms_qs.filter(nombre__icontains=q_form)
+        if categoria:
+            forms_qs = forms_qs.filter(categoria__id=categoria)
+        forms = FormularioLiteSerializer(forms_qs.order_by("nombre")[:limit_forms], many=True).data
+
+        return Response({"usuarios": users, "formularios": forms}, status=200)
+
+    @action(detail=False, methods=["post"], url_path="crear-asignacion")
+    @transaction.atomic
+    def bulk_assign(self, request):
+        """
+        Body:
+        {
+          "usuario": "linda" | "<uuid-usuario>",
+          "formularios": ["<uuid-form-1>", "<uuid-form-2>", ...],
+          "replace": false
+        }
+        """
+        ser = AsignacionBulkSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        user = ser.validated_data["user_obj"]
+        form_ids = set(ser.validated_data["form_ids"])
+        replace = ser.validated_data["replace"]
+
+        actuales = set(UserFormulario.objects.filter(id_usuario=user).values_list("id_formulario", flat=True))
+        nuevos = list(form_ids - actuales)
+        ya_estaban = list(form_ids & actuales)
+
+        # crear nuevas asignaciones evitando duplicados
+        UserFormulario.objects.bulk_create(
+            [UserFormulario(id_usuario=user, id_formulario_id=fid) for fid in nuevos],
+            ignore_conflicts=True
+        )
+
+        removidos = []
+        if replace:
+            a_remover = list(actuales - form_ids)
+            if a_remover:
+                UserFormulario.objects.filter(id_usuario=user, id_formulario_id__in=a_remover).delete()
+                removidos = a_remover
+
+        total = UserFormulario.objects.filter(id_usuario=user).count()
+
+        return Response({
+            "ok": True,
+            "usuario": {"id": str(user.pk), "nombre_usuario": user.nombre_usuario, "nombre": user.nombre},
+            "asignados_nuevos": [str(x) for x in nuevos],
+            "ya_asignados":     [str(x) for x in ya_estaban],
+            "removidos":        [str(x) for x in removidos],
+            "total_actual": total
+        }, status=200)

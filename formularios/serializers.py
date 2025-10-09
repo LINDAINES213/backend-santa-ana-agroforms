@@ -3,11 +3,13 @@ from .services import _uuid32_no_dashes, hash_password, uuid32
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, Usuario
+from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
 # from .validators import validate_config_against_schema
 from django.db import connection
 from rest_framework.validators import UniqueValidator
 import uuid
+from django.db import models
+from django.db.models import Q
 
 class GrupoSerializer(serializers.ModelSerializer):
     # devolver solo el id del campo-group (no el objeto completo)
@@ -438,4 +440,70 @@ class FormularioUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"disponible_hasta_fecha": "Debe ser >= disponible_desde_fecha"}
             )
+        return attrs
+
+class UsuarioAsignarFormulariosSerializer(serializers.Serializer):
+    formularios = serializers.ListField(
+        child=serializers.UUIDField(format="hex_verbose"),
+        allow_empty=False
+    )
+    # si replace=True, reemplaza el set completo (elimina los que no estén en la lista)
+    replace = serializers.BooleanField(required=False, default=False)
+
+    def validate_formularios(self, value):
+        # desdup en input
+        return list(dict.fromkeys(value))
+
+class UsuarioLiteSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="nombre_usuario", read_only=True)
+
+    class Meta:
+        model = Usuario
+        fields = ("id", "nombre_usuario", "nombre")
+
+class FormularioLiteSerializer(serializers.ModelSerializer):
+    categoria_nombre = serializers.CharField(source="categoria.nombre", read_only=True)
+    class Meta:
+        model = Formulario
+        fields = ("id", "nombre", "categoria_nombre")
+
+class UserFormularioSerializer(serializers.ModelSerializer):
+    usuario = UsuarioLiteSerializer(source="id_usuario", read_only=True)
+    formulario = FormularioLiteSerializer(source="id_formulario", read_only=True)
+
+    class Meta:
+        model = UserFormulario
+        fields = ("id", "usuario", "formulario")
+
+class AsignacionBulkSerializer(serializers.Serializer):
+    """
+    Recibe:
+      - usuario: username o UUID del usuario
+      - formularios: lista de UUIDs de formularios
+      - replace (opcional): si True, reemplaza el set (elimina los no incluidos)
+    """
+    usuario = serializers.CharField(required=True)
+    formularios = serializers.ListField(
+        child=serializers.UUIDField(format="hex_verbose"),
+        allow_empty=False
+    )
+    replace = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        u_raw = attrs["usuario"]
+        form_ids = list(dict.fromkeys(attrs["formularios"]))  # desdup
+
+        # resolver usuario por username o id
+        try:
+            user = Usuario.objects.get(models.Q(nombre_usuario__iexact=u_raw))
+        except Usuario.DoesNotExist:
+            raise serializers.ValidationError({"usuario": "Usuario no existe."})
+
+        existentes = set(Formulario.objects.filter(id__in=form_ids).values_list("id", flat=True))
+        faltantes = [str(x) for x in form_ids if x not in existentes]
+        if faltantes:
+            raise serializers.ValidationError({"formularios": f"IDs inexistentes: {', '.join(faltantes)}"})
+
+        attrs["user_obj"] = user
+        attrs["form_ids"] = list(existentes)
         return attrs

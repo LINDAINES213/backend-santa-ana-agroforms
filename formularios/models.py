@@ -132,6 +132,10 @@ class UserFormulario(models.Model):
     class Meta:
         # managed = False
         db_table = "formularios_user_formulario"
+        unique_together = (("id_formulario", "id_usuario"),)  # evita duplicados
+        indexes = [
+            models.Index(fields=["id_usuario", "id_formulario"]),
+        ]
 
 class FormularioIndexVersion(models.Model):
     id_index_version = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
