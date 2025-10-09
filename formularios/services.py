@@ -1,4 +1,6 @@
 # # services.py
+from hashlib import sha256
+from io import BytesIO
 import json
 import uuid
 from django.db import transaction, connection
@@ -11,10 +13,16 @@ from django.utils import timezone
 import re
 from argon2.low_level import hash_secret, verify_secret, Type
 from os import urandom
+import pandas as pd
+
+from formularios.azure_storage import AzureBlobStorageService
 
 from .models import (
     Formulario,
     FormularioIndexVersion,
+    FuenteDatos,
+    FuenteDatosValor,
+    FuenteDatosVersion,
     Grupo,
     Pagina,
     PaginaVersion,
@@ -319,7 +327,13 @@ def crear_campo_en_pagina(id_pagina: str, payload: dict) -> dict:
         requerido=requerido,
     )
 
-    # === NUEVO: si es 'group', registrar/actualizar Grupo usando config ===
+    if (clase or "").lower() == "dataset":
+        cfg_dict = cfg if isinstance(cfg, dict) else json.loads(cfg or "{}")
+        with transaction.atomic():
+            ver, n = _materializar_dataset_para_campo(cfg_dict, campo)  # 👈 pásale campo
+        campo.config = json.dumps(cfg_dict, ensure_ascii=False)
+        campo.save(update_fields=["config"])
+
     if (clase or "").lower() == "group":
         # cfg puede ser dict o string JSON
         cfg_dict = {}
@@ -546,13 +560,101 @@ def versionar_pagina_sin_clonar(pagina) -> PaginaVersion:
         PaginaCampo.objects.bulk_create([
             PaginaCampo(
                 id_pagina_version=nueva_pv.id_pagina_version,
-                id_campo=l.id_campo,          # ← MISMO Campo (id_campo estable)
+                id_campo=l.id_campo,          
                 sequence=l.sequence
             )
             for l in links
         ])
 
     return nueva_pv
+
+def _materializar_dataset_para_campo(cfg: dict, campo: Campo): 
+    """
+    Lee el blob de FuenteDatos, calcula hash, crea (o reutiliza) FuenteDatosVersion
+    y llena FuenteDatosValor para la(s) columna(s) requeridas por cfg.dataset.
+    Retorna (version, rows_insertadas)
+    """
+    ds = cfg.get("dataset") or {}
+    fuente_id = ds.get("fuente_id")
+    mode = (ds.get("mode") or "single").lower()
+    alias = ds.get("column") or ds.get("label_column") or "dataset"  
+
+    f = FuenteDatos.objects.get(pk=fuente_id)
+    storage = AzureBlobStorageService()
+    content = storage.download_file(f.blob_name)
+    ext = f.archivo_nombre.split(".")[-1].lower()
+    file_obj = BytesIO(content)
+
+    if ext in ("xlsx","xls"):
+        df = pd.read_excel(file_obj, dtype=str)
+    else:
+        df = pd.read_csv(file_obj, dtype=str)
+
+    df = df.fillna("")
+
+    cols = set(map(str, df.columns))
+    if mode == "single":
+        col = ds.get("column")
+        if not col or col not in cols:
+            raise ValidationError(f"Columna '{col}' no existe en la fuente. Disponibles: {sorted(cols)}")
+    else:  # pair
+        kcol, lcol = ds.get("key_column"), ds.get("label_column")
+        missing = [x for x in (kcol, lcol) if x not in cols]
+        if missing:
+            raise ValidationError(f"Columnas faltantes en la fuente: {missing}. Disponibles: {sorted(cols)}")
+
+    for c in df.columns:
+        df[c] = df[c].astype(str).str.strip()
+
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    content_hash = sha256(csv_bytes).hexdigest()
+
+    last = FuenteDatosVersion.objects.filter(fuente=f).order_by("-version").first()
+    if last and last.content_hash == content_hash:
+        ver = last
+    else:
+        ver = FuenteDatosVersion.objects.create(
+            fuente=f,
+            version=(last.version + 1) if last else 1,
+            row_count=len(df),
+            columnas=list(df.columns),
+            content_hash=content_hash,
+        )
+
+    FuenteDatosValor.objects.filter(campo=campo).delete()
+
+    rows = []
+    if mode == "single":
+        col = ds["column"]
+        for v in df[col].drop_duplicates().sort_values():
+            if not v:
+                continue
+            rows.append(FuenteDatosValor(
+                version=ver, campo=campo, columna=alias,
+                key_text=None, label_text=v,
+                valor_raw={"value": v}, extras={}
+            ))
+    else: 
+        kcol, lcol = ds["key_column"], ds["label_column"]
+        tmp = df[[kcol, lcol]].drop_duplicates().sort_values(by=[lcol, kcol])
+        for _, r in tmp.iterrows():
+            k = (r[kcol] or "").strip()
+            l = (r[lcol] or "").strip()
+            if not k or not l:
+                continue
+            rows.append(FuenteDatosValor(
+                version=ver, campo=campo, columna=alias,
+                key_text=k, label_text=l,
+                valor_raw={kcol: k, lcol: l}, extras={}
+            ))
+
+    if rows:
+        FuenteDatosValor.objects.bulk_create(rows, batch_size=5000)
+
+    ds["version"] = ver.version
+    cfg["dataset"] = ds
+    return ver, len(rows)
+
 # @transaction.atomic
 # def duplicar_formulario_orm(formulario_id) -> dict:
 #     # 1) origen

@@ -146,6 +146,41 @@ class PaginaSerializer(serializers.ModelSerializer):
         # No expongamos FKs internos; con esto basta para el GET
         fields = ("id_pagina", "secuencia", "nombre", "descripcion")
 
+def _normalize_dataset_config(config: dict) -> dict:
+    """
+    Acepta config plano o anidado bajo 'dataset'.
+    - Si está plano, lo envuelve en {'dataset': ...}
+    - Mapea alias 'file' -> 'fuente_id'
+    - Coloca defaults razonables
+    """
+    if not isinstance(config, dict):
+        # si viene string JSON, intenta parsear
+        try:
+            config = json.loads(config or "{}")
+        except Exception:
+            return {}
+
+    # Si ya viene anidado, úsalo
+    if "dataset" in config and isinstance(config["dataset"], dict):
+        ds = config["dataset"]
+    else:
+        # compat: aceptar plano
+        ds = dict(config)
+        config = {"dataset": ds}
+
+    # alias: file -> fuente_id
+    if "file" in ds and "fuente_id" not in ds:
+        ds["fuente_id"] = ds.get("file")
+
+    # defaults
+    ds["mode"] = (ds.get("mode") or "single").lower()
+    if "cache_inline" not in ds:
+        ds["cache_inline"] = True
+    if "max_items_inline" not in ds:
+        ds["max_items_inline"] = 300
+
+    return config
+
 class CrearCampoEnPaginaSerializer(serializers.Serializer):
     clase = serializers.CharField()
     nombre_campo = serializers.RegexField(r"^[a-zA-Z0-9_]+$", max_length=64)
@@ -154,6 +189,39 @@ class CrearCampoEnPaginaSerializer(serializers.Serializer):
     requerido = serializers.BooleanField(required=False)
     config = serializers.JSONField(required=False)     # se valida con isjson() en la BD
     sequence = serializers.IntegerField(required=False, min_value=1)  # posición opcional
+
+
+        
+    def validate(self, attrs):
+        clase = (attrs.get("clase") or "").lower()
+        cfg = attrs.get("config")
+
+        # Normaliza config si es dataset
+        if clase == "dataset":
+            cfg_norm = _normalize_dataset_config(cfg)
+            if not cfg_norm or "dataset" not in cfg_norm:
+                raise serializers.ValidationError({"config": "Debe incluir objeto 'dataset'."})
+
+            ds = cfg_norm["dataset"]
+            mode = ds.get("mode")
+
+            if not ds.get("fuente_id"):
+                raise serializers.ValidationError({"config": {"dataset.fuente_id": "Requerido"}})
+
+            if mode == "single":
+                if not ds.get("column"):
+                    raise serializers.ValidationError({"config": {"dataset.column": "Requerido en mode=single"}})
+            elif mode == "pair":
+                if not ds.get("key_column") or not ds.get("label_column"):
+                    raise serializers.ValidationError({"config": {"dataset.key_column/label_column": "Requeridos en mode=pair"}})
+                # column es opcional como alias lógico
+            else:
+                raise serializers.ValidationError({"config": {"dataset.mode": "Debe ser 'single' o 'pair'"}})
+
+            # guarda la versión normalizada para que el service reciba el formato estándar
+            attrs["config"] = cfg_norm
+
+        return attrs
     
 
 class PaginaConCamposSerializer(PaginaSerializer):

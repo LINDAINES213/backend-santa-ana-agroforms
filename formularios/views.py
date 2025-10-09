@@ -235,7 +235,13 @@ class PaginaViewSet(viewsets.ModelViewSet):
         id32 = _uuid32_no_dashes(str(id_pagina))
         ser = CrearCampoEnPaginaSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        out = crear_campo_en_pagina(id32, ser.validated_data)
+        try:
+            out = crear_campo_en_pagina(id32, ser.validated_data)
+            return Response(out, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            # Importante: asegura rollback y regresa error legible del PRIMER fallo
+            transaction.set_rollback(True)
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         # 2) Si te mandaron un grupo, enlaza automáticamente el campo al grupo
         gid = request.data.get("grupo") or request.data.get("id_grupo")
