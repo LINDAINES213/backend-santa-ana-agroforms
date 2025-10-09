@@ -20,10 +20,7 @@ jobs:
       - name: TruffleHog
         uses: trufflesecurity/trufflehog@main
         with:
-          # Escanea todo el repositorio incluyendo historial
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
           extra_args: --only-verified --exclude-paths=.trufflehogignore
 
       - name: Exportar reporte JSON (filesystem)

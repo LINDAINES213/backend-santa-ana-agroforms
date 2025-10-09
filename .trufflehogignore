@@ -1,27 +1,25 @@
-# --- Ignorar rutas de tooling y outputs del BE ---
-path:.scannerwork/**
-path:.snyk
-path:.pytest_cache/**
-path:.mypy_cache/**
-path:.ruff_cache/**
-path:.vscode/**
-path:__pycache__/**
-path:media/**          # si usas media local para pruebas
-path:staticfiles/**    # si colectas staticfiles en CI
-path:dist/**
-path:build/**
-path:coverage/**
-path:htmlcov/**
+# TruffleHog ignore patterns
 
-# --- Migraciones & datos semilla (si contienen fixtures de prueba ruidosos) ---
-path:migraciones/**
-path:*/migrations/**
+# Ignorar rutas de tooling y outputs del BE
+\.scannerwork/
+\.snyk$
+\.pytest_cache/
+\.mypy_cache/
+\.ruff_cache/
+\.vscode/
+__pycache__/
+media/
+staticfiles/
+dist/
+build/
+coverage/
+htmlcov/
 
-# --- Patrones públicos conocidos que no deben alertar ---
-pattern:-----BEGIN PUBLIC KEY-----
-pattern:example_fake_secret_
-pattern:sample_public_key
+# Migraciones & datos semilla
+migraciones/
+.*/migrations/
 
-# --- Archivos de configuración frecuentemente ruidosos ---
-path:*.sqlite
-path:*.db
+# Archivos de configuración frecuentemente ruidosos
+.*\.sqlite$
+.*\.db$
+.*\.log$
