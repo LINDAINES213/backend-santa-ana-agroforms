@@ -6,36 +6,31 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
     PORT=8000
 
-# Paquetes de sistema necesarios (ODBC y utilidades)
+# Paquetes del sistema mínimos para Django + PostgreSQL
+# - libpq5: runtime de PostgreSQL
+# - build-essential (opcional si compilas extensiones nativas)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gnupg ca-certificates apt-transport-https \
-    unixodbc unixodbc-dev libgssapi-krb5-2 build-essential \
- && mkdir -p /usr/share/keyrings \
- && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-      | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg \
- && echo "deb [signed-by=/usr/share/keyrings/microsoft.gpg arch=amd64] https://packages.microsoft.com/debian/12/prod bookworm main" \
-      > /etc/apt/sources.list.d/microsoft.list \
- && apt-get update && ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
-      msodbcsql17 mssql-tools18 \
- && ln -s /opt/mssql-tools18/bin/sqlcmd /usr/local/bin/sqlcmd \
- && ln -s /opt/mssql-tools18/bin/bcp /usr/local/bin/bcp \
+    libpq5 build-essential curl ca-certificates \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Directorio de trabajo
 WORKDIR /app
 
 # Instalar dependencias de Python
+# Recomendado: usar psycopg 3 binario para evitar compilar
+# (en tu requirements.txt incluye: psycopg[binary]==3.2.3 por ejemplo)
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
 # Copiar el proyecto
 COPY . .
 
-# Collectstatic (asegúrate de tener STATIC_ROOT en settings.py)
+# Collectstatic (no falla si no tienes static configurado)
 RUN python manage.py collectstatic --noinput || true
 
-# Exponer puerto (Koyeb usará $PORT, pero lo declaramos para local)
+# Exponer puerto
 EXPOSE 8000
 
-# CMD con gunicorn (más estable que runserver en producción)
+# Arranque con gunicorn (producción)
 CMD exec gunicorn backend.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3 --threads 2 --timeout 120
