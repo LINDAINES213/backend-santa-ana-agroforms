@@ -1,6 +1,8 @@
-from django.db.models.signals import post_save
-from django.dispatch import receiver
+from django.db.models.signals import post_save, pre_save
 from django.db import transaction
+from django.dispatch import receiver
+from oauth2_provider.models import AccessToken, RefreshToken
+from .models import Usuario
 
 from .models import Formulario, FormularioIndexVersion, Formulario_Index_Version, Pagina, Pagina_Index_Version
 
@@ -9,7 +11,6 @@ from .services import activar_version
 @receiver(post_save, sender=Formulario)
 def crear_y_activar_version_inicial(sender, instance: Formulario, created, **kwargs):
     if created:
-        # 1) crear v1 del formulario
         v1 = FormularioIndexVersion.objects.create(formulario_id=instance)
 
         def _despues_commit():
@@ -20,7 +21,6 @@ def crear_y_activar_version_inicial(sender, instance: Formulario, created, **kwa
                 nombre="General",
                 descripcion="",
             )
-            # ✅ AÑADIR: puntero a la versión inicial
             Pagina_Index_Version.objects.update_or_create(
                 id_pagina=nueva,
                 defaults={"id_index_version": v1},
@@ -28,7 +28,6 @@ def crear_y_activar_version_inicial(sender, instance: Formulario, created, **kwa
 
             activar_version(instance, v1)
 
-        # Ejecutar cuando la creación de v1 ya quedó confirmada
         transaction.on_commit(_despues_commit)
 
 @receiver(post_save, sender=FormularioIndexVersion)
@@ -42,14 +41,12 @@ def _registrar_historial_al_crear_version(sender, instance: FormularioIndexVersi
     if not created:
         return
 
-    # Insertar en historial inmediatamente (si ya existiera, no duplica)
     def _do():
         Formulario_Index_Version.objects.get_or_create(
-            id_index_version=instance,                       # PK = versión
+            id_index_version=instance,                      
             defaults={"id_formulario": instance.formulario_id},
         )
 
-        # --- (OPCIONAL) actualizar puntero de versión activa si tienes esa tabla ---
         try:
             from django.apps import apps
             FormularioIndex = apps.get_model("formularios", "FormularioIndex")
@@ -62,13 +59,7 @@ def _registrar_historial_al_crear_version(sender, instance: FormularioIndexVersi
                 defaults={"id_index_version": instance},
             )
 
-    # Asegura que se ejecute cuando la transacción que creó la versión ya esté confirmada
     transaction.on_commit(_do)
-
-from django.db.models.signals import pre_save
-from django.dispatch import receiver
-from oauth2_provider.models import AccessToken, RefreshToken
-from .models import Usuario
 
 @receiver(pre_save, sender=Usuario)
 def revoke_tokens_on_flag_disable(sender, instance: Usuario, **kwargs):

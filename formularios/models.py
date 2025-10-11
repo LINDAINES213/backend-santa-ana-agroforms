@@ -5,9 +5,10 @@ from formularios.auth_models import UsuarioManager
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 
 try:
-    from django.db.models import JSONField  # Django 3.1+
+    from django.db.models import JSONField
 except Exception:
     JSONField = None
+
 # Create your models here.
 class Categoria(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -20,25 +21,6 @@ class Categoria(models.Model):
     class Meta:
         # managed = False
         db_table = 'formularios_categoria'
-
-# class Usuario(models.Model):
-#     nombre_usuario = models.CharField(max_length=50, primary_key=True, db_column="nombre_usuario")
-#     nombre = models.CharField(max_length=100)
-#     correo = models.EmailField(unique=True)
-#     contrasena = models.CharField(max_length=128)
-#     activo = models.BooleanField(default=True)
-
-#     roles = models.ManyToManyField(
-#         "formularios.Rol",
-#         through="formularios.RolUser",
-#         related_name="usuarios",
-#     )
-
-#     class Meta:
-#         # managed = False
-#         db_table = "formularios_usuario"
-#         ordering = ("nombre",)
-
 
 class Usuario(AbstractBaseUser, PermissionsMixin):
     nombre_usuario = models.CharField(max_length=50, primary_key=True, db_column="nombre_usuario")
@@ -144,8 +126,8 @@ class FormularioIndexVersion(models.Model):
     formulario_id = models.ForeignKey(
         Formulario,
         on_delete=models.CASCADE,
-        db_column='formulario_id',   # <-- mapea al nombre físico correcto en la BD
-        related_name='versiones'     # (opcional, útil en consultas)
+        db_column='formulario_id',   
+        related_name='versiones'     
     )
 
     class Meta:
@@ -288,7 +270,7 @@ class FuenteDatosVersion(models.Model):
     version = models.PositiveIntegerField()
     row_count = models.IntegerField(default=0)
     columnas = models.JSONField(default=list)
-    content_hash = models.CharField(max_length=64)      # sha256 del CSV lógico
+    content_hash = models.CharField(max_length=64) 
     creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -311,7 +293,6 @@ class FuenteDatosValor(models.Model):
             models.Index(fields=["campo", "label_text"]),
             models.Index(fields=["version", "columna"]),
         ]
-        # Antes: ("version","columna","key_text","label_text")
         unique_together = (("campo", "key_text", "label_text"),)
 
 class Grupo(models.Model):

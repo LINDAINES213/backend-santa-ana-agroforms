@@ -1,18 +1,14 @@
+# serializers.py
 import json
-from .services import _uuid32_no_dashes, hash_password, uuid32
+from .services import _uuid32_no_dashes, hash_password
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
 from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
-# from .validators import validate_config_against_schema
-from django.db import connection
-from rest_framework.validators import UniqueValidator
-import uuid
 from django.db import models
 from django.db.models import Q
 
 class GrupoSerializer(serializers.ModelSerializer):
-    # devolver solo el id del campo-group (no el objeto completo)
     id_campo_group = serializers.CharField(source="id_campo_group_id", read_only=True)
 
     class Meta:
@@ -60,7 +56,6 @@ class FuenteDatosSerializer(serializers.ModelSerializer):
         
         return value
 
-
 class FuenteDatosCreateSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=200)
     descripcion = serializers.CharField(required=False, allow_blank=True)
@@ -97,33 +92,14 @@ class FuenteDatosCreateSerializer(serializers.Serializer):
 
         return instancia
 
-# class PaginaSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Pagina
-#         fields = "__all__"
-#         read_only_fields = ("id_pagina", "index_version", "formulario")
-
-# class PaginaConCamposSerializer(serializers.ModelSerializer):
-#     campos = serializers.SerializerMethodField()
-
-#     class Meta:
-#         model = Pagina
-#         fields = ("id_pagina","secuencia","nombre","descripcion","index_version","formulario","campos")
-
-#     def get_campos(self, obj):
-#         qs = obj.campos.all().order_by("sequence","id_campo")
-#         return CampoSerializer(qs, many=True).data
-
-# serializers.py
-
 class FormularioListSerializer(serializers.ModelSerializer):
     categoria_nombre = serializers.SerializerMethodField()
     class Meta:
         model = Formulario
         fields = (
             "id",
-            "categoria",            # FK (id de Categoria)
-            "categoria_nombre",   # nombre de la categoría (read-only)
+            "categoria",            
+            "categoria_nombre",   
             "nombre",
             "descripcion",
             "permitir_fotos",
@@ -139,11 +115,9 @@ class FormularioListSerializer(serializers.ModelSerializer):
     def get_categoria_nombre(self, obj):
         return obj.categoria.nombre if obj.categoria else None
 
-
 class PaginaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Pagina
-        # No expongamos FKs internos; con esto basta para el GET
         fields = ("id_pagina", "secuencia", "nombre", "descripcion")
 
 def _normalize_dataset_config(config: dict) -> dict:
@@ -154,25 +128,20 @@ def _normalize_dataset_config(config: dict) -> dict:
     - Coloca defaults razonables
     """
     if not isinstance(config, dict):
-        # si viene string JSON, intenta parsear
         try:
             config = json.loads(config or "{}")
         except Exception:
             return {}
 
-    # Si ya viene anidado, úsalo
     if "dataset" in config and isinstance(config["dataset"], dict):
         ds = config["dataset"]
     else:
-        # compat: aceptar plano
         ds = dict(config)
         config = {"dataset": ds}
 
-    # alias: file -> fuente_id
     if "file" in ds and "fuente_id" not in ds:
         ds["fuente_id"] = ds.get("file")
 
-    # defaults
     ds["mode"] = (ds.get("mode") or "single").lower()
     if "cache_inline" not in ds:
         ds["cache_inline"] = True
@@ -187,16 +156,13 @@ class CrearCampoEnPaginaSerializer(serializers.Serializer):
     etiqueta = serializers.CharField(max_length=100)
     ayuda = serializers.CharField(max_length=255, required=False, allow_null=True, allow_blank=True)
     requerido = serializers.BooleanField(required=False)
-    config = serializers.JSONField(required=False)     # se valida con isjson() en la BD
-    sequence = serializers.IntegerField(required=False, min_value=1)  # posición opcional
-
-
+    config = serializers.JSONField(required=False)     
+    sequence = serializers.IntegerField(required=False, min_value=1)  
         
     def validate(self, attrs):
         clase = (attrs.get("clase") or "").lower()
         cfg = attrs.get("config")
 
-        # Normaliza config si es dataset
         if clase == "dataset":
             cfg_norm = _normalize_dataset_config(cfg)
             if not cfg_norm or "dataset" not in cfg_norm:
@@ -214,15 +180,12 @@ class CrearCampoEnPaginaSerializer(serializers.Serializer):
             elif mode == "pair":
                 if not ds.get("key_column") or not ds.get("label_column"):
                     raise serializers.ValidationError({"config": {"dataset.key_column/label_column": "Requeridos en mode=pair"}})
-                # column es opcional como alias lógico
             else:
                 raise serializers.ValidationError({"config": {"dataset.mode": "Debe ser 'single' o 'pair'"}})
 
-            # guarda la versión normalizada para que el service reciba el formato estándar
             attrs["config"] = cfg_norm
 
         return attrs
-    
 
 class PaginaConCamposSerializer(PaginaSerializer):
     campos = serializers.SerializerMethodField()
@@ -231,13 +194,11 @@ class PaginaConCamposSerializer(PaginaSerializer):
         fields = PaginaSerializer.Meta.fields + ("campos",)
 
     def get_campos(self, obj):
-        # 1) normalizar id_pagina a 32 sin guiones
         try:
             id_pagina_32 = _uuid32_no_dashes(str(obj.id_pagina))
         except Exception:
             return []
 
-        # 2) última versión de esa página
         pv = (PaginaVersion.objects
             .filter(id_pagina=id_pagina_32)
             .order_by("-fecha_creacion")
@@ -245,7 +206,6 @@ class PaginaConCamposSerializer(PaginaSerializer):
         if not pv:
             return []
 
-        # 3) enlaces de esa versión → campos
         links = (PaginaCampo.objects
                 .filter(id_pagina_version=pv.id_pagina_version)
                 .select_related("id_campo")
@@ -267,10 +227,9 @@ class PaginaConCamposSerializer(PaginaSerializer):
                     return {}
             return {}
 
-        # 4) construir salida plana + índices
         out = []
-        index = {}           # id_campo -> dict en out
-        seq_by_campo = {}    # id_campo -> sequence en página
+        index = {}           
+        seq_by_campo = {}    
         for l in links:
             c = l.id_campo
             cfg = _cfg_dict(c.config)
@@ -288,7 +247,6 @@ class PaginaConCamposSerializer(PaginaSerializer):
             index[d["id_campo"]] = d
             seq_by_campo[d["id_campo"]] = l.sequence
 
-        # 5) anidar hijos en cada group y recolectar ids que van DENTRO de grupos
         child_ids = set()
         for d in out:
             if (d.get("clase") or "").lower() != "group":
@@ -313,15 +271,11 @@ class PaginaConCamposSerializer(PaginaSerializer):
             hijos.sort(key=lambda h: seq_by_campo.get(h["id_campo"], 10**9))
             d["children"] = hijos
 
-            # marcar estos campos para NO mostrarlos al nivel raíz
             child_ids.update([h["id_campo"] for h in hijos])
 
-        # 6) devolver solo: todos los groups + los campos que NO estén en child_ids
         top_level = [d for d in out if (d.get("clase","").lower()=="group") or (d["id_campo"] not in child_ids)]
-        # mantener orden por sequence (ya viene ordenado), pero reordenamos por seguridad
         top_level.sort(key=lambda d: seq_by_campo.get(d["id_campo"], 10**9))
         return top_level
-
 
 class FormularioSerializer(serializers.ModelSerializer):
     categoria_nombre = serializers.SerializerMethodField()
@@ -335,7 +289,6 @@ class FormularioSerializer(serializers.ModelSerializer):
         return obj.categoria.nombre if obj.categoria else None
 
     def get_paginas(self, obj):
-        # 1) última versión del formulario
         last_version = (
             FormularioIndexVersion.objects
             .filter(formulario_id=obj)
@@ -345,14 +298,12 @@ class FormularioSerializer(serializers.ModelSerializer):
         if not last_version:
             return []
 
-        # 2) IDs de páginas vigentes para esa versión
         page_ids = (
             Pagina_Index_Version.objects
             .filter(id_index_version=last_version)
             .values_list("id_pagina", flat=True)
         )
 
-        # 3) Devuelve esas Páginas (ids estables)
         qs = Pagina.objects.filter(id_pagina__in=page_ids).order_by("secuencia")
         return PaginaConCamposSerializer(qs, many=True, context=self.context).data
 
@@ -381,12 +332,10 @@ class UsuarioCreateSerializer(serializers.ModelSerializer):
         plain = validated.pop("password")
         validated["password"] = hash_password(plain)
 
-        # crea usuario
         user = Usuario.objects.create(**validated)
         return user
 
 class UsuarioUpdateSerializer(serializers.ModelSerializer):
-    # password opcional y write-only: si viene, la seteamos correctamente
     password = serializers.CharField(write_only=True, required=False, min_length=8, style={"input_type": "password"})
 
     class Meta:
@@ -404,7 +353,7 @@ class UsuarioUpdateSerializer(serializers.ModelSerializer):
         for k, v in validated.items():
             setattr(instance, k, v)
         if pwd:
-            instance.set_password(pwd)  # usa tu hash Argon2
+            instance.set_password(pwd)
         instance.save()
         return instance
 
@@ -421,12 +370,8 @@ class PaginaUpdateSerializer(serializers.ModelSerializer):
         fields = ("nombre", "descripcion", "secuencia")
         extra_kwargs = {k: {"required": False} for k in fields}
 
-# serializers.py
-from rest_framework import serializers
-import json
 
 class CampoUpdateSerializer(serializers.ModelSerializer):
-    # Acepta dict JSON en la entrada
     config = serializers.JSONField(required=False)
 
     class Meta:
@@ -445,19 +390,16 @@ class CampoUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated):
         cfg_patch = validated.pop("config", None)
 
-        # Actualiza los demás campos de forma parcial
         for k, v in validated.items():
             setattr(instance, k, v)
 
         if cfg_patch is not None:
-            # ¿reemplazar toda la config? (si pasas ?replace_config=1|true)
             request = self.context.get("request")
             replace_all = False
             if request:
                 q = request.query_params
                 replace_all = (q.get("replace_config") or "").lower() in ("1", "true", "yes")
 
-            # Config actual (string JSON en BD) -> dict
             try:
                 current = json.loads(instance.config) if instance.config else {}
             except Exception:
@@ -470,7 +412,6 @@ class CampoUpdateSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({"config": "Debe ser un objeto JSON"})
                 merged = self._deep_merge(current if isinstance(current, dict) else {}, cfg_patch)
 
-            # Guardamos como string JSON
             instance.config = json.dumps(merged, ensure_ascii=False)
 
         instance.save()
@@ -479,29 +420,28 @@ class CampoUpdateSerializer(serializers.ModelSerializer):
 class PaginaUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Pagina
-        fields = ("nombre", "descripcion", "secuencia")  # manda solo lo que cambies
+        fields = ("nombre", "descripcion", "secuencia") 
         extra_kwargs = {k: {"required": False} for k in ("nombre","descripcion","secuencia")}
 
 class FormularioUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Formulario
         fields = (
-            "categoria",              # FK (UUID) si aplica
+            "categoria",              
             "nombre",
             "descripcion",
             "permitir_fotos",
             "permitir_gps",
-            "disponible_desde_fecha", # Date (YYYY-MM-DD)
-            "disponible_hasta_fecha", # Date (YYYY-MM-DD)
-            "estado",                 # p.ej. "Activa"
-            "forma_envio",            # p.ej. "En Linea/fuera Linea"
+            "disponible_desde_fecha", 
+            "disponible_hasta_fecha", 
+            "estado",                 
+            "forma_envio",            
             "es_publico",
             "auto_envio",
         )
         extra_kwargs = {f: {"required": False} for f in fields}
 
     def validate(self, attrs):
-        # Validar rango de fechas si vienen ambas
         d = attrs.get("disponible_desde_fecha")
         h = attrs.get("disponible_hasta_fecha")
         if d and h and d > h:
@@ -515,11 +455,9 @@ class UsuarioAsignarFormulariosSerializer(serializers.Serializer):
         child=serializers.UUIDField(format="hex_verbose"),
         allow_empty=False
     )
-    # si replace=True, reemplaza el set completo (elimina los que no estén en la lista)
     replace = serializers.BooleanField(required=False, default=False)
 
     def validate_formularios(self, value):
-        # desdup en input
         return list(dict.fromkeys(value))
 
 class UsuarioLiteSerializer(serializers.ModelSerializer):
@@ -559,9 +497,8 @@ class AsignacionBulkSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         u_raw = attrs["usuario"]
-        form_ids = list(dict.fromkeys(attrs["formularios"]))  # desdup
+        form_ids = list(dict.fromkeys(attrs["formularios"]))
 
-        # resolver usuario por username o id
         try:
             user = Usuario.objects.get(models.Q(nombre_usuario__iexact=u_raw))
         except Usuario.DoesNotExist:

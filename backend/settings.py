@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'oauth2_provider',
     "formularios",  
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -123,6 +124,58 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
         'formularios.permissions.IsWebAllowed',
     ],
+    # ← Agregar esto para drf-spectacular
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Santa Ana AgroForms',
+    'DESCRIPTION': 'API REST para gestión de formularios dinámicos con soporte para campos personalizados, categorías, usuarios y fuentes de datos',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    
+    # Configuración de seguridad OAuth2
+    'SECURITY': [
+        {
+            'OAuth2': [],
+        },
+        {
+            'BearerAuth': [],
+        }
+    ],
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'OAuth2': {
+                'type': 'oauth2',
+                'flows': {
+                    'password': {
+                        'tokenUrl': '/api/auth/login/',
+                        'scopes': {
+                            'read': 'Read access',
+                            'write': 'Write access'
+                        }
+                    }
+                }
+            },
+            'BearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+            }
+        }
+    },
+    
+    # Configuración de UI
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'persistAuthorization': True,
+        'displayOperationId': True,
+        'filter': True,
+    },
+    
+    # Otros ajustes
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SORT_OPERATIONS': False,
 }
 
 # Configuración de OAuth2

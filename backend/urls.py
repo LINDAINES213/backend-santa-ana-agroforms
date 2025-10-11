@@ -21,12 +21,19 @@ from django.urls import path, include
 from formularios import views
 from django.conf import settings
 from django.conf.urls.static import static
+from drf_spectacular.views import (
+    SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+)
 
 
 urlpatterns = [
-    path('', views.home, name='home'),  # Ruta raíz
+    path('', views.home, name='home'),  
     path('admin/', admin.site.urls),
     path('api/', include('formularios.urls')), 
+    path("o/", include("oauth2_provider.urls", namespace="oauth2_provider")),
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="docs"),
+    path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path('oauth/', include('oauth2_provider.urls', namespace='oauth2_provider')),
     path('api-auth/', include('rest_framework.urls')),  # Agregar esto
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

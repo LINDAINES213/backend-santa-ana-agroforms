@@ -24,6 +24,3 @@ urlpatterns = [
     path('auth/logout/', auth_views.logout, name='logout'),
     path('auth/me/', auth_views.user_info, name='user-info'),
 ]
-
-
-# urlpatterns = router.urls
