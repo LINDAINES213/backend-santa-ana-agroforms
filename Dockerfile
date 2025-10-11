@@ -5,27 +5,29 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
     PORT=8000
 
-# Dependencias mínimas (PostgreSQL runtime)
+# Dependencias del sistema mínimas para Postgres y compilación básica
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 build-essential curl ca-certificates \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# Instalar dependencias
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip \
  && pip install --no-cache-dir -r requirements.txt \
- && python -m pip show gunicorn \
- && python -m gunicorn --version
+ && python -m pip show uvicorn
 
+# Copiar proyecto
 COPY . .
 
-# Si usas collectstatic
+# Static (opcional)
 RUN python manage.py collectstatic --noinput || true
 
 EXPOSE 8000
 
-# Nota: usar python -m gunicorn evita problemas de PATH
-CMD exec python -m gunicorn backend.wsgi:application \
-  --bind 0.0.0.0:${PORT:-8000} \
-  --workers 3 --threads 2 --timeout 120
+# Importante: usar ASGI de Django (Django 3.0+)
+# backend.asgi:application debe existir (creado por startproject)
+CMD exec python -m uvicorn backend.asgi:application \
+  --host 0.0.0.0 --port ${PORT:-8000} \
+  --workers 3 --timeout-keep-alive 120
