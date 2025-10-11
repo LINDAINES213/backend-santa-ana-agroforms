@@ -10,24 +10,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 build-essential curl ca-certificates \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias
+# Instalar dependencias de Python
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt \
- && python -m pip show uvicorn
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-# Copiar proyecto
+# Copiar el proyecto
 COPY . .
 
-# Static (opcional)
+# Collectstatic (asegúrate de tener STATIC_ROOT en settings.py)
 RUN python manage.py collectstatic --noinput || true
 
+# Exponer puerto (Koyeb usará $PORT, pero lo declaramos para local)
 EXPOSE 8000
 
-# Importante: usar ASGI de Django (Django 3.0+)
-# backend.asgi:application debe existir (creado por startproject)
-CMD exec python -m uvicorn backend.asgi:application \
-  --host 0.0.0.0 --port ${PORT:-8000} \
-  --workers 3 --timeout-keep-alive 120
+# CMD con gunicorn (más estable que runserver en producción)
+CMD exec gunicorn backend.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3 --threads 2 --timeout 120
