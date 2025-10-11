@@ -2,9 +2,9 @@ name: BE Pytest
 
 on:
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev", "feat/SANTAANA-v1.0"]
   push:
-    branches: ["dev"]
+    branches: ["dev", "feat/SANTAANA-v1.0"]
 
 jobs:
   pytest:

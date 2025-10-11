@@ -2,9 +2,9 @@ name: SonarCloud Code Analysis Backend
 
 on:
   pull_request:
-    branches: ["main"]
+    branches: ["main", "feat/SANTAANA-v1.0"]
   push:
-    branches: ["dev"]
+    branches: ["dev", "feat/SANTAANA-v1.0"]
 
 jobs:
   sonar:
