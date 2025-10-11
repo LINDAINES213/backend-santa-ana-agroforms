@@ -79,7 +79,7 @@ docker run -d `
   lindain1333/santa-ana-api:latest `
   python manage.py runserver 0.0.0.0:8082
 ```
-> Si se usa el puerto 8082 visualizar la API en `http://localhost:8082/api/docs`, sino reemplazar por el puerto que se coloque
+> Si se usa el puerto 8082 visualizar la API en [http://localhost:8082/api/docs](http://localhost:8082/api/docs), sino reemplazar por el puerto que se coloque
 
 > Nota: Tomar en cuenta que se debe ejecutar dentro de la carpeta que se encuentre las credencuales en el archivo .env
 
@@ -95,22 +95,22 @@ pip install -r requirements.txt
 python manage.py runserver 8081
 ```
 
-Visita: `http://localhost:8081/api/docs`
+Visita: [http://localhost:8081/api/docs](http://localhost:8081/api/docs)
 
 ---
 
 ## 🚀 API Desplegada
 
-Visita: `https://santa-ana-api.onrender.com/api/docs`. Considerar que se debe usar la ruta de autenticación login con usuario y contraseña, y el access_token devuelto introducirse en la sección de BearerAuth para que se pueda tener acceso al uso de rutas.
+Visita: [https://santa-ana-api.onrender.com/api/docs](https://santa-ana-api.onrender.com/api/docs). Considerar que se debe usar la ruta de autenticación login con usuario y contraseña, y el access_token devuelto introducirse en la sección de BearerAuth para que se pueda tener acceso al uso de rutas.
 
 ---
 
 ## 🔗 Docker Hub
 
-La imagen oficial se publica en: `https://hub.docker.com/r/lindain1333/santa-ana-api`
+La imagen oficial se publica en: [https://hub.docker.com/r/lindain1333/santa-ana-api](https://hub.docker.com/r/lindain1333/santa-ana-api)
 
 ---
 
 ## 👩🏽‍💻 Autor
 
-* Linda Jiménez `https://github.com/LINDAINES213`
+* Linda Jiménez [https://github.com/LINDAINES213](https://github.com/LINDAINES213)
