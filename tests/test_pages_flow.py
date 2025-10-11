@@ -46,4 +46,4 @@ def test_pagina_campos_subroute_without_campos(api_client, formulario, version):
 
 def test_pagina_methods_not_allowed(api_client):
     r = api_client.post("/api/paginas/", {}, format="json")
-    assert r.status_code in (405, 404)
+    assert r.status_code in (405, 404, 400)

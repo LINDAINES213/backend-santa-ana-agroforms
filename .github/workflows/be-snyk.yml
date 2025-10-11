@@ -27,6 +27,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           command: monitor
+          args: --skip-unresolved
       
       - name: Snyk Open Source Test
         uses: snyk/actions/python@master
