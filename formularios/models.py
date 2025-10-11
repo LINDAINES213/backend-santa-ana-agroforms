@@ -213,7 +213,7 @@ class ClaseCampo(models.Model):
 
 
 class Campo(models.Model):
-    id_campo = models.CharField(primary_key=True, max_length=32, db_column="id_campo")
+    id_campo = models.UUIDField(primary_key=True, default=uuid.uuid4, db_column="id_campo")
     tipo = models.CharField(max_length=20, db_column="tipo")
     clase = models.CharField(max_length=30, db_column="clase")
     nombre_campo = models.CharField(max_length=64, db_column="nombre_campo")
@@ -278,7 +278,7 @@ class FuenteDatosVersion(models.Model):
         unique_together = (("fuente","version"),)
 
 class FuenteDatosValor(models.Model):
-    id = models.BigAutoField(primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     version = models.ForeignKey(FuenteDatosVersion, on_delete=models.CASCADE, related_name="valores")
     campo = models.ForeignKey('Campo', on_delete=models.CASCADE, related_name='dataset_valores', null=True, blank=True)
     columna = models.CharField(max_length=200)
@@ -296,7 +296,7 @@ class FuenteDatosValor(models.Model):
         unique_together = (("campo", "key_text", "label_text"),)
 
 class Grupo(models.Model):
-    id_grupo = models.CharField(primary_key=True, max_length=64, db_column="id_grupo")
+    id_grupo = models.UUIDField(primary_key=True, default=uuid.uuid4, db_column="id_grupo")
     id_campo_group = models.OneToOneField(
         Campo,
         on_delete=models.CASCADE,

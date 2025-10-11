@@ -9,8 +9,6 @@ from django.utils import timezone
 from datetime import timedelta
 from .services import verify_password
 from .models import Usuario
-
-# Imports para Swagger
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiExample
 
 
