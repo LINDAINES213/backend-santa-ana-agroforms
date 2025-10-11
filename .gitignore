@@ -1,0 +1,9 @@
+venv/
+.venv/
+openssl/
+*.pyc
+.env
+.idea/
+.pytest_cache/
+tests/__pycache__
+.vscode/

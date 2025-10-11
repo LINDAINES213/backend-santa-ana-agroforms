@@ -1,0 +1,25 @@
+# TruffleHog ignore patterns
+
+# Ignorar rutas de tooling y outputs del BE
+\.scannerwork/
+\.snyk$
+\.pytest_cache/
+\.mypy_cache/
+\.ruff_cache/
+\.vscode/
+__pycache__/
+media/
+staticfiles/
+dist/
+build/
+coverage/
+htmlcov/
+
+# Migraciones & datos semilla
+migraciones/
+.*/migrations/
+
+# Archivos de configuración frecuentemente ruidosos
+.*\.sqlite$
+.*\.db$
+.*\.log$

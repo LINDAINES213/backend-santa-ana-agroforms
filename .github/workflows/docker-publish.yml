@@ -2,7 +2,7 @@ name: Build & Push Docker (Docker Hub)
 
 on:
   push:
-    branches: [ "dev" ]   # <-- rama dev
+    branches: [ "dev", "feat/SANTAANA-v1.0" ]   # <-- rama dev
   workflow_dispatch: {}
 
 jobs:
