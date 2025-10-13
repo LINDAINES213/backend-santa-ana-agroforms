@@ -27,7 +27,7 @@ from drf_spectacular.types import OpenApiTypes
     destroy=extend_schema(tags=["Datasets"]),
 )
 class FuenteDatosViewSet(viewsets.ModelViewSet):
-    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+    http_method_names = ["get", "post", "delete", "head", "options"]
     """
     ViewSet para gestionar Fuentes de Datos (Excel/CSV en Azure Blob Storage)
     
@@ -211,14 +211,14 @@ class PaginaViewSet(viewsets.ModelViewSet):
             self.serializer_class = PaginaConCamposSerializer
         return super().retrieve(request, *args, **kwargs)
 
-    @extend_schema(tags=["Páginas"], summary="Listar campos de la página")
+    @extend_schema(tags=["Campos"], summary="Listar campos de la página")
     @action(detail=True, methods=["get"], url_path="campos")
     def campos(self, request, id_pagina=None):
         pagina = self.get_object()
         data = PaginaConCamposSerializer(pagina, context=self.get_serializer_context()).data
         return Response(data.get("campos", []), status=status.HTTP_200_OK)
 
-    @extend_schema(tags=["Páginas"], summary="Agregar campo a la página")
+    @extend_schema(tags=["Campos"], summary="Agregar campo a la página")
     @action(detail=True, methods=["post"], url_path="campos")
     def agregar_campo(self, request, id_pagina=None):
         id32 = _uuid32_no_dashes(str(id_pagina))
@@ -269,6 +269,7 @@ class PaginaViewSet(viewsets.ModelViewSet):
 
 @extend_schema_view(
     list=extend_schema(tags=["Formularios"]),
+    retrieve=extend_schema(tags=["Formularios"]),
 )
 class FormularioListViewSet(viewsets.ReadOnlyModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
@@ -425,6 +426,40 @@ class FormularioViewSet(viewsets.ModelViewSet):
         )
 
         return Response({"ok": True, "id_pagina": str(nueva_pagina.id_pagina)}, status=201)
+
+    @extend_schema(tags=["Formularios"], summary="Suspender Formulario")
+    @action(detail=True, methods=["post"], url_path="suspender")
+    def suspender(self, request, *args, **kwargs):
+        form = self.get_object()
+        if (form.estado or "").lower() == "suspendida":
+            return Response({"detail": "El formulario ya está en estado 'Suspendida'."}, status=200)
+        form.estado = "Suspendida"
+        form.save(update_fields=["estado"])
+        return Response({"ok": True, "id": str(form.id), "estado": form.estado}, status=200)
+
+    @extend_schema(tags=["Formularios"], summary="No permite abrir formularios suspendidos")
+    def retrieve(self, request, *args, **kwargs):
+        """Bloquear 'abrir' si está Suspendida."""
+        obj = self.get_object()
+        if (obj.estado or "").lower() == "suspendida":
+            return Response(
+                {"detail": "Formulario suspendido. Solo puede editar el estado para reactivarlo."},
+                status=423  # Locked
+            )
+        return super().retrieve(request, *args, **kwargs)
+
+    @extend_schema(tags=["Formularios"], summary="Actualizar campo de estado")
+    def partial_update(self, request, *args, **kwargs):
+        """Si está Suspendida, permitir modificar ÚNICAMENTE el campo 'estado'."""
+        obj = self.get_object()
+        if (obj.estado or "").lower() == "suspendida":
+            campos = set((request.data or {}).keys())
+            if campos - {"estado"}:
+                return Response(
+                    {"detail": "Bloqueado: formulario suspendido. Solo se permite cambiar el estado."},
+                    status=423
+                )
+        return super().partial_update(request, *args, **kwargs)
 
 @extend_schema_view(
     list=extend_schema(tags=["Usuarios"]),
