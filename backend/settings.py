@@ -28,11 +28,24 @@ DEBUG = True
 
 # DEBUG = os.getenv("DEBUG", "False").lower() in ("1","true","yes")
 
-
+# Web App Security (client side)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
+SECURE_SSL_REDIRECT = False # for production (True), dev (False)
+SECURE_HSTS_SECONDS = 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+SECURE_HSTS_PRELOAD = False
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
 ALLOWED_HOSTS = ['*']
 CORS_ALLOW_ALL_ORIGINS = True
 
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://santa-ana-forms.web.app",
+]
 
 # Application definition
 
@@ -82,6 +95,8 @@ WSGI_APPLICATION = "backend.wsgi.application"
 
 
 # Database
+# PGSSLROOTCERT = os.getenv("PGSSLROOTCERT", os.path.join(BASE_DIR, "certs", "pg", "ca.crt"))
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -94,10 +109,8 @@ DATABASES = {
         "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),   # pooling simple
         "ATOMIC_REQUESTS": True,                                   # transacciones por request
         "OPTIONS": {
-            # Úsalo si tu servidor exige SSL (Heroku, Azure, etc.)
-            # "sslmode": "require",
-            # Ejemplo de search_path si usas varios esquemas:
-            # "options": "-c search_path=public,extras"
+            "sslmode": os.getenv("PGSSLMODE", "require"),
+            # "sslrootcert": PGSSLROOTCERT,
         },
     }
 }

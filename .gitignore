@@ -1,9 +1,14 @@
 venv/
 .venv/
-openssl/
 *.pyc
 .env
 .idea/
 .pytest_cache/
 tests/__pycache__
 .vscode/
+certs/**/*.key
+certs/**/*.p12
+*.pem
+*.pfx
+*.dump
+*.sql
