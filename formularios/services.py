@@ -22,7 +22,6 @@ from .models import (
     FormularioIndexVersion,
     FuenteDatos,
     FuenteDatosValor,
-    FuenteDatosVersion,
     Grupo,
     Pagina,
     PaginaVersion,
@@ -267,9 +266,27 @@ def crear_campo_en_pagina(id_pagina: str, payload: dict) -> dict:
     )
 
     if (clase or "").lower() == "dataset":
-        cfg_dict = cfg if isinstance(cfg, dict) else json.loads(cfg or "{}")
-        with transaction.atomic():
-            ver, n = _materializar_dataset_para_campo(cfg_dict, campo)
+        cfg_dict = {}
+        if isinstance(cfg, dict):
+            cfg_dict = cfg
+        elif isinstance(cfg, str):
+            try:
+                cfg_dict = json.loads(cfg or "{}")
+            except Exception:
+                cfg_dict = {}
+
+        # Valida config mínima
+        ds = (cfg_dict.get("dataset") or {})
+        if not ds.get("fuente_id"):
+            raise ValueError("config.dataset.fuente_id es requerido para campos dataset")
+
+        # Llama a la función sin versiones: devuelve SOLO n
+        n = _materializar_dataset_para_campo(cfg_dict, campo)
+
+        # Asegura que no quede 'version' viejo en el config
+        if "dataset" in cfg_dict and isinstance(cfg_dict["dataset"], dict):
+            cfg_dict["dataset"].pop("version", None)
+
         campo.config = json.dumps(cfg_dict, ensure_ascii=False)
         campo.save(update_fields=["config"])
 
@@ -471,24 +488,30 @@ def versionar_pagina_sin_clonar(pagina) -> PaginaVersion:
 
     return nueva_pv
 
-def _materializar_dataset_para_campo(cfg: dict, campo: Campo): 
+@transaction.atomic
+def _materializar_dataset_para_campo(cfg: dict, campo):
     """
-    Lee el blob de FuenteDatos, calcula hash, crea (o reutiliza) FuenteDatosVersion
-    y llena FuenteDatosValor para la(s) columna(s) requeridas por cfg.dataset.
-    Retorna (version, rows_insertadas)
+    Lee el blob de FuenteDatos y llena FuenteDatosValor para ESTE campo.
+    **Sin versiones**: borra lo existente y re-materializa.
+    Retorna rows_insertadas (int).
     """
-    ds = cfg.get("dataset") or {}
+    ds = (cfg or {}).get("dataset") or {}
     fuente_id = ds.get("fuente_id")
-    mode = (ds.get("mode") or "single").lower()
-    alias = ds.get("column") or ds.get("label_column") or "dataset"  
+    mode = (ds.get("mode") or "pair").lower()  # "pair" o "single"
+    alias = ds.get("column") or ds.get("label_column") or "dataset"
+
+    if not fuente_id:
+        raise ValidationError("dataset.fuente_id es requerido")
 
     f = FuenteDatos.objects.get(pk=fuente_id)
+
     storage = AzureBlobStorageService()
     content = storage.download_file(f.blob_name)
-    ext = f.archivo_nombre.split(".")[-1].lower()
+    ext = (f.archivo_nombre or f.blob_name).split(".")[-1].lower()
     file_obj = BytesIO(content)
 
-    if ext in ("xlsx","xls"):
+    # Lee Excel/CSV como texto
+    if ext in ("xlsx", "xls"):
         df = pd.read_excel(file_obj, dtype=str)
     else:
         df = pd.read_csv(file_obj, dtype=str)
@@ -499,61 +522,84 @@ def _materializar_dataset_para_campo(cfg: dict, campo: Campo):
     if mode == "single":
         col = ds.get("column")
         if not col or col not in cols:
-            raise ValidationError(f"Columna '{col}' no existe en la fuente. Disponibles: {sorted(cols)}")
+            raise ValidationError(
+                f"Columna '{col}' no existe en la fuente. Disponibles: {sorted(cols)}"
+            )
     else:  # pair
         kcol, lcol = ds.get("key_column"), ds.get("label_column")
-        missing = [x for x in (kcol, lcol) if x not in cols]
+        missing = [x for x in (kcol, lcol) if not x or x not in cols]
         if missing:
-            raise ValidationError(f"Columnas faltantes en la fuente: {missing}. Disponibles: {sorted(cols)}")
+            raise ValidationError(
+                f"Columnas faltantes en la fuente: {missing}. Disponibles: {sorted(cols)}"
+            )
 
+    # Trim de todas las columnas
     for c in df.columns:
         df[c] = df[c].astype(str).str.strip()
 
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    content_hash = sha256(csv_bytes).hexdigest()
-
-    last = FuenteDatosVersion.objects.filter(fuente=f).order_by("-version").first()
-    if last and last.content_hash == content_hash:
-        ver = last
-    else:
-        ver = FuenteDatosVersion.objects.create(
-            fuente=f,
-            version=(last.version + 1) if last else 1,
-            row_count=len(df),
-            columnas=list(df.columns),
-            content_hash=content_hash,
-        )
-
+    # Limpia valores previos del campo
     FuenteDatosValor.objects.filter(campo=campo).delete()
 
+    # Construye filas
     rows = []
     if mode == "single":
         col = ds["column"]
-        for v in df[col].drop_duplicates().sort_values():
-            if not v:
-                continue
-            rows.append(FuenteDatosValor(
-                version=ver, campo=campo, columna=alias,
-                key_text=None, label_text=v,
-                valor_raw={"value": v}, extras={}
-            ))
-    else: 
+        # únicos + ordenados; evita vacíos
+        for v in (
+            df[col]
+            .dropna()
+            .map(lambda x: x.strip())
+            .loc[lambda s: s != ""]
+            .drop_duplicates()
+            .sort_values()
+        ):
+            rows.append(
+                FuenteDatosValor(
+                    campo=campo,
+                    fuente=f,               # <-- requiere tener FK fuente en el modelo
+                    columna=alias,
+                    key_text=None,
+                    label_text=v,
+                    valor_raw={"value": v},
+                    extras={},
+                )
+            )
+    else:
         kcol, lcol = ds["key_column"], ds["label_column"]
-        tmp = df[[kcol, lcol]].drop_duplicates().sort_values(by=[lcol, kcol])
+        tmp = (
+            df[[kcol, lcol]]
+            .dropna()
+            .assign(
+                **{
+                    kcol: df[kcol].map(lambda x: (x or "").strip()),
+                    lcol: df[lcol].map(lambda x: (x or "").strip()),
+                }
+            )
+            .loc[lambda d: (d[kcol] != "") & (d[lcol] != "")]
+            .drop_duplicates()
+            .sort_values(by=[lcol, kcol])
+        )
+
         for _, r in tmp.iterrows():
-            k = (r[kcol] or "").strip()
-            l = (r[lcol] or "").strip()
-            if not k or not l:
-                continue
-            rows.append(FuenteDatosValor(
-                version=ver, campo=campo, columna=alias,
-                key_text=k, label_text=l,
-                valor_raw={kcol: k, lcol: l}, extras={}
-            ))
+            k, l = r[kcol], r[lcol]
+            rows.append(
+                FuenteDatosValor(
+                    campo=campo,
+                    fuente=f,               # <-- requiere tener FK fuente en el modelo
+                    columna=alias,
+                    key_text=k,
+                    label_text=l,
+                    valor_raw={kcol: k, lcol: l},
+                    extras={},
+                )
+            )
 
     if rows:
+        # ajusta batch_size si manejas catálogos muy grandes
         FuenteDatosValor.objects.bulk_create(rows, batch_size=5000)
 
-    ds["version"] = ver.version
+    # Limpia cualquier rastro viejo de versión en el config
+    ds.pop("version", None)
     cfg["dataset"] = ds
-    return ver, len(rows)
+
+    return len(rows)

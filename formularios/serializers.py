@@ -4,7 +4,7 @@ from .services import _uuid32_no_dashes, hash_password
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
+from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, FuenteDatosValor, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
 from django.db import models
 from django.db.models import Q
 
@@ -243,6 +243,28 @@ class PaginaConCamposSerializer(PaginaSerializer):
                 "requerido": c.requerido,
                 "config": cfg,
             }
+            if (c.clase or "").lower() == "dataset":
+                ds = (cfg or {}).get("dataset", {}) if isinstance(cfg, dict) else {}
+                cache_inline = bool(ds.get("cache_inline", True))
+                max_items = int(ds.get("max_items_inline", 300) or 300)
+
+                if cache_inline:
+                    qs = FuenteDatosValor.objects.filter(campo=c).order_by("label_text")
+                    total = qs.count()
+                    if total <= max_items:
+                        mode = (ds.get("mode") or "single").lower()
+                        if mode == "pair":
+                            d["options"] = [
+                                {"value": r.key_text, "label": r.label_text}
+                                for r in qs.iterator()
+                            ]
+                        else:  # single
+                            d["options"] = [
+                                {"value": r.label_text, "label": r.label_text}
+                                for r in qs.iterator()
+                            ]
+                        d["options_count"] = total
+                        
             out.append(d)
             index[d["id_campo"]] = d
             seq_by_campo[d["id_campo"]] = l.sequence

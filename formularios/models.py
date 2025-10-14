@@ -264,36 +264,25 @@ class FuenteDatos(models.Model):
     def __str__(self):
         return self.nombre
 
-class FuenteDatosVersion(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    fuente = models.ForeignKey(FuenteDatos, on_delete=models.CASCADE, related_name="versiones")
-    version = models.PositiveIntegerField()
-    row_count = models.IntegerField(default=0)
-    columnas = models.JSONField(default=list)
-    content_hash = models.CharField(max_length=64) 
-    creado_en = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = "formularios_fuente_datos_version"
-        unique_together = (("fuente","version"),)
-
 class FuenteDatosValor(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    version = models.ForeignKey(FuenteDatosVersion, on_delete=models.CASCADE, related_name="valores")
-    campo = models.ForeignKey('Campo', on_delete=models.CASCADE, related_name='dataset_valores', null=True, blank=True)
-    columna = models.CharField(max_length=200)
-    key_text = models.TextField(null=True, blank=True)
+    campo = models.ForeignKey("Campo", on_delete=models.CASCADE, db_index=True, related_name="dataset_vals")
+    fuente = models.ForeignKey("FuenteDatos", on_delete=models.CASCADE, db_index=True)  # nuevo
+    columna = models.CharField(max_length=200, blank=True, default="")
+    key_text = models.TextField(blank=True, null=True)
     label_text = models.TextField()
     valor_raw = models.JSONField(default=dict)
     extras = models.JSONField(default=dict)
+
+    creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "formularios_fuente_datos_valor"
         indexes = [
             models.Index(fields=["campo", "label_text"]),
-            models.Index(fields=["version", "columna"]),
+            models.Index(fields=["campo", "key_text"]),
         ]
-        unique_together = (("campo", "key_text", "label_text"),)
+        unique_together = (("campo", "key_text"),)
 
 class Grupo(models.Model):
     id_grupo = models.UUIDField(primary_key=True, default=uuid.uuid4, db_column="id_grupo")
