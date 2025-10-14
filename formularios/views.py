@@ -15,9 +15,8 @@ from .models import FuenteDatos
 from .serializers import FuenteDatosSerializer, FuenteDatosCreateSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 from . import services
-from drf_spectacular.utils import (
-    extend_schema, extend_schema_view
-)
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample
+
 from drf_spectacular.types import OpenApiTypes
 
 @extend_schema_view(
@@ -637,6 +636,34 @@ class AsignacionViewSet(viewsets.ModelViewSet):
         forms = FormularioLiteSerializer(forms_qs.order_by("nombre")[:limit_forms], many=True).data
 
         return Response({"usuarios": users, "formularios": forms}, status=200)
+    
+    def get_serializer_class(self):
+        if self.action == "bulk_assign":
+            return AsignacionBulkSerializer   # <- usa el serializer de entrada
+        return super().get_serializer_class()
+
+    @extend_schema(
+        tags=["Asignaciones"],
+        summary="Asignar formularios a usuario",
+        request=AsignacionBulkSerializer,     # <- define el esquema del body
+        examples=[
+            OpenApiExample(
+                "Ejemplo básico",
+                value={
+                    "usuario": "linda",
+                    "formularios": [
+                        "3bd465c9-6d27-437f-a391-1faa17c57ded",
+                        "1d234d08-7b33-4cb6-8a6e-8f0846bf8fc8"
+                    ],
+                    "replace": False
+                },
+                request_only=True,
+            )
+        ],
+        responses={
+            200: OpenApiResponse(description="Asignación realizada")
+        },
+    )
 
     @extend_schema(tags=["Asignaciones"], summary="Asignar formularios a usuario")
     @action(detail=False, methods=["post"], url_path="crear-asignacion")
@@ -661,24 +688,35 @@ class AsignacionViewSet(viewsets.ModelViewSet):
         nuevos = list(form_ids - actuales)
         ya_estaban = list(form_ids & actuales)
 
-        UserFormulario.objects.bulk_create(
-            [UserFormulario(id_usuario=user, id_formulario_id=fid) for fid in nuevos],
-            ignore_conflicts=True
-        )
+        creados = []
+        for fid in nuevos:
+            obj, was_created = UserFormulario.objects.get_or_create(
+                id_usuario=user,
+                id_formulario_id=fid,
+            )
+            if was_created:
+                creados.append(fid)
 
         removidos = []
         if replace:
             a_remover = list(actuales - form_ids)
             if a_remover:
-                UserFormulario.objects.filter(id_usuario=user, id_formulario_id__in=a_remover).delete()
+                UserFormulario.objects.filter(
+                    id_usuario=user,
+                    id_formulario_id__in=a_remover
+                ).delete()
                 removidos = a_remover
 
         total = UserFormulario.objects.filter(id_usuario=user).count()
 
         return Response({
             "ok": True,
-            "usuario": {"id": str(user.pk), "nombre_usuario": user.nombre_usuario, "nombre": user.nombre},
-            "asignados_nuevos": [str(x) for x in nuevos],
+            "usuario": {
+                "id": str(user.pk),
+                "nombre_usuario": user.nombre_usuario,
+                "nombre": user.nombre
+            },
+            "asignados_nuevos": [str(x) for x in creados],
             "ya_asignados":     [str(x) for x in ya_estaban],
             "removidos":        [str(x) for x in removidos],
             "total_actual": total
