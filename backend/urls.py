@@ -16,7 +16,7 @@ Including another URLconf
 """
 
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, reverse_lazy
 # from formularios.views import CampoViewSet, FormularioDetalleAPIView
 from formularios import views
 from django.conf import settings
@@ -24,10 +24,11 @@ from django.conf.urls.static import static
 from drf_spectacular.views import (
     SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 )
+from django.views.generic.base import RedirectView
 
 
 urlpatterns = [
-    path('', views.home, name='home'),  
+    path('', RedirectView.as_view(url=reverse_lazy('docs'), permanent=False)),  
     path('admin/', admin.site.urls),
     path('api/', include('formularios.urls')), 
     path("o/", include("oauth2_provider.urls", namespace="oauth2_provider")),
@@ -35,5 +36,5 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="docs"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path('oauth/', include('oauth2_provider.urls', namespace='oauth2_provider')),
-    path('api-auth/', include('rest_framework.urls')),  # Agregar esto
+    path('api-auth/', include('rest_framework.urls')),
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
