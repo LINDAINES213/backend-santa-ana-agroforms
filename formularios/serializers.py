@@ -142,7 +142,7 @@ def _normalize_dataset_config(config: dict) -> dict:
     if "file" in ds and "fuente_id" not in ds:
         ds["fuente_id"] = ds.get("file")
 
-    ds["mode"] = (ds.get("mode") or "single").lower()
+    ds["mode"] = (ds.get("mode") or "pair").lower()
     if "cache_inline" not in ds:
         ds["cache_inline"] = True
     if "max_items_inline" not in ds:
@@ -178,7 +178,8 @@ class CrearCampoEnPaginaSerializer(serializers.Serializer):
                 if not ds.get("column"):
                     raise serializers.ValidationError({"config": {"dataset.column": "Requerido en mode=single"}})
             elif mode == "pair":
-                if not ds.get("key_column") or not ds.get("label_column"):
+                ds["key_column"] = ds.get("key_column") or "id"
+                if not ds.get("label_column"):
                     raise serializers.ValidationError({"config": {"dataset.key_column/label_column": "Requeridos en mode=pair"}})
             else:
                 raise serializers.ValidationError({"config": {"dataset.mode": "Debe ser 'single' o 'pair'"}})
@@ -252,7 +253,7 @@ class PaginaConCamposSerializer(PaginaSerializer):
                     qs = FuenteDatosValor.objects.filter(campo=c).order_by("label_text")
                     total = qs.count()
                     if total <= max_items:
-                        mode = (ds.get("mode") or "single").lower()
+                        mode = (ds.get("mode") or "pair").lower()
                         if mode == "pair":
                             d["options"] = [
                                 {"value": r.key_text, "label": r.label_text}

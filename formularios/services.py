@@ -517,25 +517,71 @@ def _materializar_dataset_para_campo(cfg: dict, campo):
         df = pd.read_csv(file_obj, dtype=str)
 
     df = df.fillna("")
+    df.columns = [str(c).strip() for c in df.columns]
 
-    cols = set(map(str, df.columns))
+    # Índice case-insensitive de columnas + chequeo de colisiones (p.ej. 'ID' y 'id')
+    lower_idx = {}
+    for c in df.columns:
+        k = c.lower()
+        if k in lower_idx and lower_idx[k] != c:
+            raise ValidationError(
+                f"Columnas duplicadas que solo difieren por mayúsculas/minúsculas: "
+                f"'{lower_idx[k]}' y '{c}'. Renombra en la fuente."
+            )
+        lower_idx[k] = c
+
+    def resolve_col(name: str | None, default: str | None = None) -> str:
+        """
+        Devuelve el nombre EXACTO presente en el DF, resolviendo case-insensitive.
+        Si name es None, usa default. Lanza error si no existe.
+        """
+        target = (name or default or "").strip()
+        if not target:
+            raise ValidationError("No se especificó columna requerida.")
+        real = lower_idx.get(target.lower())
+        if not real:
+            raise ValidationError(
+                f"Columna '{name or default}' no existe en la fuente. "
+                f"Disponibles: {sorted(df.columns)}"
+            )
+        return real
+
+    # cols = set(map(str, df.columns))
+    # if mode == "single":
+    #     col = ds.get("column")
+    #     if not col or col not in cols:
+    #         raise ValidationError(
+    #             f"Columna '{col}' no existe en la fuente. Disponibles: {sorted(cols)}"
+    #         )
+    # else:  # pair
+    #     kcol, lcol = ds.get("key_column"), ds.get("label_column")
+    #     missing = [x for x in (kcol, lcol) if not x or x not in cols]
+    #     if missing:
+    #         raise ValidationError(
+    #             f"Columnas faltantes en la fuente: {missing}. Disponibles: {sorted(cols)}"
+    #         )
+
+    # --- (2) Resolver columnas según el modo (case-insensitive) ---
     if mode == "single":
-        col = ds.get("column")
-        if not col or col not in cols:
-            raise ValidationError(
-                f"Columna '{col}' no existe en la fuente. Disponibles: {sorted(cols)}"
-            )
-    else:  # pair
-        kcol, lcol = ds.get("key_column"), ds.get("label_column")
-        missing = [x for x in (kcol, lcol) if not x or x not in cols]
-        if missing:
-            raise ValidationError(
-                f"Columnas faltantes en la fuente: {missing}. Disponibles: {sorted(cols)}"
-            )
+        col_real = resolve_col(ds.get("column"))
+        # Persistimos el nombre real de la columna en el config
+        ds["column"] = col_real
+        alias = col_real  # alias útil para rastrear en FuenteDatosValor.columna
+    elif mode == "pair":
+        # default 'id' si no viene key_column; resolverá 'ID', 'Id', etc.
+        kcol_real = resolve_col(ds.get("key_column"), default="id")
+        lcol_real = resolve_col(ds.get("label_column"))
+        ds["key_column"] = kcol_real
+        ds["label_column"] = lcol_real
+        # Usamos label_column como alias por defecto (o puedes mantener tu criterio original)
+        ds["column"] = lcol_real
+        alias = ds.get("label_column") or "dataset"
+    else:
+        raise ValidationError("dataset.mode debe ser 'single' o 'pair'")
 
     # Trim de todas las columnas
     for c in df.columns:
-        df[c] = df[c].astype(str).str.strip()
+        df[c] = df[c].astype(str).map(lambda x: x.strip())
 
     # Limpia valores previos del campo
     FuenteDatosValor.objects.filter(campo=campo).delete()
@@ -545,14 +591,15 @@ def _materializar_dataset_para_campo(cfg: dict, campo):
     if mode == "single":
         col = ds["column"]
         # únicos + ordenados; evita vacíos
-        for v in (
+        serie = (
             df[col]
             .dropna()
             .map(lambda x: x.strip())
             .loc[lambda s: s != ""]
             .drop_duplicates()
             .sort_values()
-        ):
+        )
+        for v in serie:
             rows.append(
                 FuenteDatosValor(
                     campo=campo,
