@@ -2,6 +2,8 @@ from ntpath import basename
 from django.urls import path, include
 from formularios import auth_views
 from rest_framework.routers import DefaultRouter
+
+from formularios.views_dashboard import dashboard_resumen
 from .views import AsignacionViewSet, CategoriaViewSet, FormularioViewSet, FuenteDatosViewSet, GrupoViewSet, PaginaViewSet, UsuarioViewSet, CampoViewSet, FormularioListViewSet
 
 router = DefaultRouter()
@@ -23,4 +25,5 @@ urlpatterns = [
     path('auth/login/', auth_views.login, name='login'),
     path('auth/logout/', auth_views.logout, name='logout'),
     path('auth/me/', auth_views.user_info, name='user-info'),
+    path('dashboard/resumen/', dashboard_resumen, name='dashboard-resumen'),
 ]

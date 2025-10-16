@@ -721,3 +721,4 @@ class AsignacionViewSet(viewsets.ModelViewSet):
             "removidos":        [str(x) for x in removidos],
             "total_actual": total
         }, status=200)
+    

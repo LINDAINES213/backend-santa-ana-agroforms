@@ -83,11 +83,11 @@ class Formulario(models.Model):
     permitir_gps = models.BooleanField(default=False)
 
     ESTADO_CHOICES = [
-        ('Ingresada', 'Ingresada'),
-        ('Activa', 'Activa'),
-        ('Suspendida', 'Suspendida'),
+        ('Ingresado', 'Ingresado'),
+        ('Activo', 'Activo'),
+        ('Suspendido', 'Suspendido'),
         ('Pruebas', 'Pruebas'),
-        ('Anulada', 'Anulada'),
+        ('Anulado', 'Anulado'),
     ]
 
     ENVIO_CHOICES = [
@@ -317,3 +317,27 @@ class CampoGrupo(models.Model):
     class Meta:
         db_table = "formularios_campo_grupo"
         unique_together = (("id_grupo", "id_campo"),)
+
+class FormularioEntry(models.Model):
+    """
+    Mapea la tabla existente: formularios_entry
+    """
+    id = models.UUIDField(primary_key=True, db_column="id")
+    id_usuario_id = models.CharField(max_length=100, db_column="id_usuario_id")  # FK lógico a Usuario.nombre_usuario
+    form_id = models.UUIDField(db_column="form_id")                              # FK lógico a Formulario.id
+    index_version_id = models.UUIDField(db_column="index_version_id")            # FK lógico a FormularioIndexVersion.id_index_version
+    form_name = models.CharField(max_length=200, db_column="form_name")
+    filled_at_local = models.DateTimeField(null=True, blank=True, db_column="filled_at_local")
+    status = models.CharField(max_length=50, db_column="status")
+    fill_json = models.JSONField(null=True, blank=True, db_column="fill_json")
+    form_json = models.JSONField(null=True, blank=True, db_column="form_json")
+    created_at = models.DateTimeField(db_column="created_at")
+    updated_at = models.DateTimeField(db_column="updated_at")
+
+    class Meta:
+        managed = False
+        db_table = "formularios_entry"
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"{self.form_name} · {self.id}"
