@@ -1,23 +1,26 @@
+from formularios.exports import content_bytes_para_un_form, excel_bytes_para_un_form, zip_bytes_todos_los_forms
 from .services import _uuid32, _uuid32_no_dashes, crear_campo_en_pagina
 from rest_framework import status, filters, viewsets
 from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
 from django.db import models
-from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioIndexVersion, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
+from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioEntry, FormularioIndexVersion, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
 from .serializers import AsignacionBulkSerializer, CampoSerializer, CampoUpdateSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioLiteSerializer, FormularioSerializer, FormularioUpdateSerializer, PaginaConCamposSerializer, PaginaSerializer, PaginaUpdateSerializer, UserFormularioSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer, UsuarioLiteSerializer, UsuarioUpdateSerializer
 from django.http import HttpResponse
 from django.utils import timezone
 import uuid
-from django.db.models import Q
+from django.db.models import Q, Count
 from .azure_storage import AzureBlobStorageService
 from .models import FuenteDatos
 from .serializers import FuenteDatosSerializer, FuenteDatosCreateSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 from . import services
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample, OpenApiParameter
 
 from drf_spectacular.types import OpenApiTypes
+from rest_framework import serializers, viewsets
+
 
 @extend_schema_view(
     list=extend_schema(tags=["Datasets"]),
@@ -722,3 +725,93 @@ class AsignacionViewSet(viewsets.ModelViewSet):
             "total_actual": total
         }, status=200)
     
+class FormularioEntryMetaSerializer(serializers.Serializer):
+    form_id = serializers.UUIDField()
+    form_name = serializers.CharField()
+    respuestas = serializers.IntegerField()
+
+from drf_spectacular.utils import (
+    extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
+)
+from drf_spectacular.types import OpenApiTypes
+
+class EntryExportViewSet(viewsets.GenericViewSet):
+    queryset = FormularioEntry.objects.all()
+    serializer_class = FormularioEntryMetaSerializer
+    lookup_field = "form_id"
+
+    # --- detalle: /api/entries/{form_id}/export/ ---
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="fmt",                                   # <-- 'fmt' en vez de 'format'
+                description="Formato de exportación",
+                required=False,
+                type=str,
+                location=OpenApiParameter.QUERY,
+                enum=["xlsx", "csv", "json"],
+                examples=[
+                    OpenApiExample("Excel (default)", value="xlsx"),
+                    OpenApiExample("CSV", value="csv"),
+                    OpenApiExample("JSON", value="json"),
+                ],
+            ),
+        ],
+        responses={200: OpenApiResponse(description="Archivo", response=OpenApiTypes.BINARY)},
+    )
+    @action(detail=True, methods=["get"], url_path="export")
+    def export_one(self, request, form_id=None):
+        fmt = (request.query_params.get("fmt") or "xlsx").lower()   # <--- antes era 'format'
+        fname, content, mime = content_bytes_para_un_form(form_id, fmt)
+        if not content:
+            return Response({"detail": "Sin respuestas para este formulario."}, status=404)
+        resp = HttpResponse(content, content_type=mime)
+        resp["Content-Disposition"] = f'attachment; filename="{fname}"'
+        return resp
+
+    # --- listado meta: /api/entries/ ---
+    @extend_schema(
+        operation_id="entries_list_meta",
+        summary="Listar formularios (meta)",
+        description="Devuelve form_id, form_name y número de respuestas.",
+    )
+    def list(self, request, *args, **kwargs):
+        from django.db import models
+        data = (FormularioEntry.objects
+                .values("form_id", "form_name")
+                .annotate(respuestas=models.Count("id"))
+                .order_by("form_name"))
+        ser = self.get_serializer(data, many=True)
+        return Response(ser.data)
+
+    # --- masivo: /api/entries/export-all/ ---
+    @extend_schema(
+        operation_id="entries_export_all",
+        summary="Exportar todos los formularios (ZIP)",
+        description="ZIP con un archivo por formulario en el formato elegido.",
+        parameters=[
+            OpenApiParameter(
+                name="format",
+                description="Formato de exportación dentro del ZIP",
+                required=False,
+                type=str,
+                location=OpenApiParameter.QUERY,
+                enum=["xlsx", "csv", "json"],
+                examples=[
+                    OpenApiExample("Excel (default)", value="xlsx"),
+                    OpenApiExample("CSV", value="csv"),
+                    OpenApiExample("JSON", value="json"),
+                ],
+            ),
+        ],
+        responses={200: OpenApiResponse(description="Archivo ZIP", response=OpenApiTypes.BINARY)},
+    )
+    @action(detail=False, methods=["get"], url_path="export-all")
+    def export_all(self, request):
+        fmt = (request.query_params.get("fmt") or "xlsx").lower()   # <--- aquí también
+        fname, content = zip_bytes_todos_los_forms(fmt)
+        if not content:
+            return Response({"detail": "No hay respuestas para exportar."}, status=404)
+        resp = HttpResponse(content, content_type="application/zip")
+        resp["Content-Disposition"] = f'attachment; filename="{fname}"'
+        return resp

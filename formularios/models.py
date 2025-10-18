@@ -323,7 +323,7 @@ class FormularioEntry(models.Model):
     Mapea la tabla existente: formularios_entry
     """
     id = models.UUIDField(primary_key=True, db_column="id")
-    id_usuario_id = models.CharField(max_length=100, db_column="id_usuario_id")  # FK lógico a Usuario.nombre_usuario
+    id_usuario = models.CharField(max_length=150, db_column="id_usuario_id", null=True, blank=True)
     form_id = models.UUIDField(db_column="form_id")                              # FK lógico a Formulario.id
     index_version_id = models.UUIDField(db_column="index_version_id")            # FK lógico a FormularioIndexVersion.id_index_version
     form_name = models.CharField(max_length=200, db_column="form_name")

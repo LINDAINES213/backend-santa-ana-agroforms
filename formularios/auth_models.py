@@ -18,32 +18,3 @@ class UsuarioManager(BaseUserManager):
         extra_fields.setdefault('activo', True)
         
         return self.create_user(nombre_usuario, correo, password, **extra_fields)
-
-# class UsuarioAuth(AbstractBaseUser, PermissionsMixin):
-#     nombre_usuario = models.CharField(max_length=50, primary_key=True, unique=True)
-#     nombre = models.CharField(max_length=100)
-#     correo = models.EmailField(unique=True)
-#     activo = models.BooleanField(default=True)
-#     is_staff = models.BooleanField(default=False)
-#     is_superuser = models.BooleanField(default=False)
-    
-#     roles = models.ManyToManyField(
-#         "formularios.Rol",
-#         through="formularios.RolUser",
-#         related_name="usuarios_auth",
-#     )
-
-#     objects = UsuarioManager()
-
-#     USERNAME_FIELD = 'nombre_usuario'
-#     REQUIRED_FIELDS = ['correo', 'nombre']
-
-#     class Meta:
-#         db_table = "formularios_usuario"
-
-#     def __str__(self):
-#         return self.nombre_usuario
-
-#     @property
-#     def is_active(self):
-#         return self.activo

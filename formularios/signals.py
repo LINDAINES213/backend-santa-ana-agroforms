@@ -76,3 +76,4 @@ def revoke_tokens_on_flag_disable(sender, instance: Usuario, **kwargs):
     if turned_off:
         AccessToken.objects.filter(user=instance).delete()
         RefreshToken.objects.filter(user=instance).delete()
+        
