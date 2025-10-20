@@ -24,7 +24,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 # DEBUG = os.getenv("DEBUG", "False").lower() in ("1","true","yes")
 

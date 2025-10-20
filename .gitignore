@@ -12,3 +12,4 @@ certs/**/*.p12
 *.pfx
 *.dump
 *.sql
+.coverage

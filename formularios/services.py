@@ -43,8 +43,13 @@ def _uuid32_no_dashes(s: str) -> str:
         return s
     raise ValueError("id_pagina inválido: debe ser UUID v4.")
 
-def uuid32(u) -> str:
-    # acepta uuid.UUID o str
+def uuid32(u=None) -> str:
+    """
+    Convierte uuid.UUID o str a formato 32 chars (sin guiones).
+    Si no se pasa argumento, genera un nuevo UUID.
+    """
+    if u is None:
+        u = uuid.uuid4()
     s = str(u)
     return s.replace("-", "").lower()  # 32 chars
 
