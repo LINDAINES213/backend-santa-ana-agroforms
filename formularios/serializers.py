@@ -244,6 +244,10 @@ class PaginaConCamposSerializer(PaginaSerializer):
                 "requerido": c.requerido,
                 "config": cfg,
             }
+            out.append(d)
+            index[d["id_campo"]] = d
+            seq_by_campo[d["id_campo"]] = l.sequence
+
             if (c.clase or "").lower() == "dataset":
                 ds = (cfg or {}).get("dataset", {}) if isinstance(cfg, dict) else {}
                 cache_inline = bool(ds.get("cache_inline", True))
@@ -266,39 +270,41 @@ class PaginaConCamposSerializer(PaginaSerializer):
                             ]
                         d["options_count"] = total
                         
-            out.append(d)
-            index[d["id_campo"]] = d
-            seq_by_campo[d["id_campo"]] = l.sequence
+            
+
+        index = {d["id_campo"]: d for d in out}
+        seq_by_campo = {d["id_campo"]: d.get("sequence", 10**9) for d in out}
 
         child_ids = set()
+
         for d in out:
             if (d.get("clase") or "").lower() != "group":
                 continue
 
-            gid = _first((d.get("config") or {}).get("id_group"))
-            if not gid:
-                d["children"] = []
-                continue
-
             try:
-                g = Grupo.objects.get(pk=gid)
+                g = Grupo.objects.get(id_campo_group_id=d["id_campo"])
             except Grupo.DoesNotExist:
                 d["children"] = []
                 continue
 
-            miembros = (CampoGrupo.objects
+
+            miembros_qs = (CampoGrupo.objects
                         .filter(id_grupo=g)
                         .values_list("id_campo_id", flat=True))
 
-            hijos = [index[cid] for cid in miembros if cid in index]
+            miembros_ids = [str(cid) for cid in miembros_qs]
+
+            hijos = [index[cid] for cid in miembros_ids if cid in index]
+
             hijos.sort(key=lambda h: seq_by_campo.get(h["id_campo"], 10**9))
             d["children"] = hijos
 
             child_ids.update([h["id_campo"] for h in hijos])
 
-        top_level = [d for d in out if (d.get("clase","").lower()=="group") or (d["id_campo"] not in child_ids)]
-        top_level.sort(key=lambda d: seq_by_campo.get(d["id_campo"], 10**9))
-        return top_level
+        if child_ids:
+            out = [d for d in out if d["id_campo"] not in child_ids]
+
+        return out
 
 class FormularioSerializer(serializers.ModelSerializer):
     categoria_nombre = serializers.SerializerMethodField()

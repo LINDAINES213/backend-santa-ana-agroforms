@@ -243,115 +243,109 @@ def _siguiente_sequence(id_pagina_version: str) -> int:
 
 @transaction.atomic
 def crear_campo_en_pagina(id_pagina: str, payload: dict) -> dict:
-    clase = payload["clase"]
+    """
+    Crea un Campo en la página (versiona página si no existe PV),
+    NO guarda enlaces de grupo en config; el enlace a grupo se hace en la vista
+    solo si viene request.data["grupo"].
+
+    - Valida clase contra formularios_clase_campo
+    - Para clase 'dataset', materializa opciones en FuenteDatosValor y normaliza config.dataset
+    - Para clase 'group', crea/actualiza la fila en formularios_grupo con id_campo_group = este Campo
+    """
+    # -------- 1) Validaciones y determinación de tipo ----------
+    clase = (payload.get("clase") or "").strip().lower()
+    if not clase:
+        raise ValidationError("El campo 'clase' es obligatorio.")
+
     if not ClaseCampo.objects.filter(pk=clase).exists():
-        raise ValueError(f"La clase '{clase}' no existe en formularios_clase_campo.")
+        raise ValidationError(f"La clase '{clase}' no existe en formularios_clase_campo.")
+
     tipo = TIPO_POR_CLASE.get(clase, clase)
 
-    nombre_campo = payload["nombre_campo"]
-    etiqueta = payload["etiqueta"]
-    ayuda = payload.get("ayuda")
-    requerido = payload.get("requerido", None)
+    nombre_campo = (payload.get("nombre_campo") or "").strip()
+    etiqueta     = (payload.get("etiqueta") or "").strip()
+    ayuda        = (payload.get("ayuda") or "").strip()
+    requerido    = payload.get("requerido", None)
 
-    cfg = payload.get("config")
-    if isinstance(cfg, (dict, list)):
-        cfg = json.dumps(cfg, ensure_ascii=False)
+    # -------- 2) Normalizar config del payload a dict (nunca usamos cfg_dict "huérfano") ----------
+    raw_cfg = payload.get("config", {})
+    cfg_dict = {}
+    if isinstance(raw_cfg, dict):
+        cfg_dict = raw_cfg
+    elif isinstance(raw_cfg, str):
+        raw_cfg = raw_cfg.strip()
+        if raw_cfg:
+            try:
+                cfg_dict = json.loads(raw_cfg)
+            except Exception:
+                cfg_dict = {}
+    # si viene otra cosa o None, se queda {}.
 
+    # -------- 3) Crear el Campo ----------
     id_campo = _uuid32()
-
     campo = Campo.objects.create(
         id_campo=id_campo,
         tipo=tipo,
         clase=clase,
-        nombre_campo=nombre_campo,
+        nombre_campo=nombre_campo or f"{clase}_{timezone.now().strftime('%H%M%S')}",
         etiqueta=etiqueta,
         ayuda=ayuda,
-        config=cfg,          
+        config=(json.dumps(cfg_dict, ensure_ascii=False) if cfg_dict else None),
         requerido=requerido,
     )
 
-    if (clase or "").lower() == "dataset":
-        cfg_dict = {}
-        if isinstance(cfg, dict):
-            cfg_dict = cfg
-        elif isinstance(cfg, str):
-            try:
-                cfg_dict = json.loads(cfg or "{}")
-            except Exception:
-                cfg_dict = {}
-
-        # Valida config mínima
+    # -------- 4) Casos especiales por clase ----------
+    if clase == "dataset":
+        # esperamos cfg_dict["dataset"] con al menos fuente_id y modo válido
         ds = (cfg_dict.get("dataset") or {})
-        if not ds.get("fuente_id"):
-            raise ValueError("config.dataset.fuente_id es requerido para campos dataset")
+        if not isinstance(ds, dict) or not ds.get("fuente_id"):
+            raise ValidationError("config.dataset.fuente_id es requerido para campos dataset")
 
-        # Llama a la función sin versiones: devuelve SOLO n
-        n = _materializar_dataset_para_campo(cfg_dict, campo)
-
-        # Asegura que no quede 'version' viejo en el config
+        # materializar catálogo y normalizar columnas finales (case-insensitive) dentro de cfg_dict
+        _materializar_dataset_para_campo(cfg_dict, campo)
+        # asegurar que 'version' no quede guardado
         if "dataset" in cfg_dict and isinstance(cfg_dict["dataset"], dict):
             cfg_dict["dataset"].pop("version", None)
 
         campo.config = json.dumps(cfg_dict, ensure_ascii=False)
         campo.save(update_fields=["config"])
 
-    if (clase or "").lower() == "group":
-        cfg_dict = {}
-        if isinstance(cfg, dict):
-            cfg_dict = cfg
-        elif isinstance(cfg, str):
-            try:
-                cfg_dict = json.loads(cfg)
-            except Exception:
-                cfg_dict = {}
-
-        id_group = _first_or_same(cfg_dict.get("id_group"))
-        name     = _first_or_same(cfg_dict.get("name"))
-        desc     = _first_or_same(cfg_dict.get("fieldCondition"))  
-
-        if not id_group:
-            id_group = _ensure_str_uuid()
-            cfg_dict["id_group"] = id_group
-        if not name:
-            name = (etiqueta or nombre_campo or "Grupo")[:150]
-            cfg_dict["name"] = name
-
-        if isinstance(campo.config, dict):
-            campo.config.update(cfg_dict)
-            campo.save(update_fields=["config"])
-        else:
-            campo.config = json.dumps(cfg_dict, ensure_ascii=False)
-            campo.save(update_fields=["config"])
-
+    elif clase == "group":
+        # NINGUNA referencia a grupo en config
+        # Creamos/actualizamos el registro de Grupo usando este Campo como id_campo_group
+        nombre_grupo = (etiqueta or nombre_campo or "Grupo")[:150]
         Grupo.objects.update_or_create(
-            id_grupo=id_group,
-            defaults={
-                "id_campo_group": campo,
-                "nombre": name,
-            }
+            id_campo_group=campo,
+            defaults={"nombre": nombre_grupo},
         )
+        # NO escribir id_group ni name en campo.config
 
+    # -------- 5) Obtener/crear la PaginaVersion destino y calcular sequence ----------
     pv = _pagina_version_actual_o_nueva(id_pagina)
 
-    seq = payload.get("sequence")
-    if not seq:
+    seq = payload.get("sequence", None)
+    try:
+        seq = int(seq) if seq is not None else None
+    except Exception:
+        seq = None
+    if seq is None:
         seq = _siguiente_sequence(pv.id_pagina_version)
 
-    with connection.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO formularios_pagina_campo (id_campo, id_pagina_version, "sequence")
-            VALUES (%s, %s, %s)
-            """,
-            [id_campo, pv.id_pagina_version, seq],
-        )
+    # -------- 6) Insertar link en formularios_pagina_campo ----------
+    PaginaCampo.objects.create(
+        id_campo=campo,
+        id_pagina_version=pv,
+        sequence=seq,
+    )
 
+    # -------- 7) Respuesta ----------
     return {
-        "id_campo": id_campo,
-        "tipo": tipo,
-        "clase": clase,
-        "nombre_campo": nombre_campo,
-        "etiqueta": etiqueta,
+        "id_campo": str(campo.id_campo),
+        "id_grupo": str(Grupo.objects.filter(id_campo_group=campo).values_list("id_grupo", flat=True).first() or ""),
+        "tipo": campo.tipo,
+        "clase": campo.clase,
+        "nombre_campo": campo.nombre_campo,
+        "etiqueta": campo.etiqueta,
         "id_pagina": id_pagina,
         "id_pagina_version": pv.id_pagina_version,
         "sequence": seq,

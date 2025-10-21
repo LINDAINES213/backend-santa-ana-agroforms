@@ -228,38 +228,27 @@ class PaginaViewSet(viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         try:
             out = crear_campo_en_pagina(id32, ser.validated_data)
-            gid = request.data.get("grupo") or request.data.get("id_grupo")
-
-            if not gid:
-                cfg = ser.validated_data.get("config") or {}
-                if isinstance(cfg, str):
-                    import json
-                    try:
-                        cfg = json.loads(cfg)
-                    except Exception:
-                        cfg = {}
-                v = cfg.get("id_group")
-                if isinstance(v, (list, tuple)) and v:
-                    gid = v[0]
-                elif isinstance(v, str):
-                    gid = v
-
+            
+            gid = request.data.get("grupo")  # <- ÚNICA fuente del grupo
+           
             if gid:
+                # 1) Verificar que el grupo existe
                 try:
                     g = Grupo.objects.get(pk=str(gid))
                 except Grupo.DoesNotExist:
                     return Response(
-                        {"detail": f"El grupo '{gid}' no existe. Crea primero el campo de clase 'group' que lo define."},
+                        {"detail": f"El grupo '{gid}' no existe. Crea primero el campo de clase 'group'."},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
+                # 2) Enlazar en formularios_campo_grupo
                 campo_id = out.get("id_campo") or out.get("campo_id")
                 if not campo_id:
                     return Response({"detail": "No se pudo resolver id_campo creado."}, status=500)
 
                 CampoGrupo.objects.get_or_create(
                     id_grupo=g,
-                    id_campo_id=str(campo_id)  
+                    id_campo_id=str(campo_id)
                 )
 
             return Response(out, status=status.HTTP_201_CREATED)
