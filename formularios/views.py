@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
 from django.db import models
-from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioEntry, FormularioIndexVersion, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
+from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioEntry, FormularioIndexVersion, FuenteDatosValor, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
 from .serializers import AsignacionBulkSerializer, CampoSerializer, CampoUpdateSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioLiteSerializer, FormularioSerializer, FormularioUpdateSerializer, PaginaConCamposSerializer, PaginaSerializer, PaginaUpdateSerializer, UserFormularioSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer, UsuarioLiteSerializer, UsuarioUpdateSerializer
 from django.http import HttpResponse
 from django.utils import timezone
@@ -49,6 +49,38 @@ class FuenteDatosViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return FuenteDatosCreateSerializer
         return FuenteDatosSerializer
+    
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        fuente = self.get_object()
+
+        # 0) ¿La fuente está en uso en formularios_fuente_datos_valor?
+        en_uso_qs = FuenteDatosValor.objects.filter(fuente=fuente)
+
+        if en_uso_qs.exists():
+            # Opcional: devolver lista compacta de campos afectados
+            campos = (
+                en_uso_qs
+                .values("campo__id_campo", "campo__nombre_campo")
+                .annotate(usos=Count("id"))
+                .order_by("campo__nombre_campo")
+            )
+            return Response(
+                {
+                    "detail": "No se puede eliminar: hay campos que utilizan esta fuente.",
+                    "campos_en_uso": list(campos),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # 1) Guardamos el blob_name y borramos el registro (cascade limpia los valores)
+        blob_name = fuente.blob_name
+        response = super().destroy(request, *args, **kwargs)
+
+        # 2) Al confirmar la transacción, eliminamos el blob en Azure
+        transaction.on_commit(lambda: AzureBlobStorageService().delete_file(blob_name))
+
+        return response
     
     @transaction.atomic
     def create(self, request, *args, **kwargs):
