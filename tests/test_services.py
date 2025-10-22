@@ -310,12 +310,14 @@ def test_crear_campo_en_pagina_basic(categoria):
 
 @pytest.mark.django_db
 def test_crear_campo_en_pagina_clase_invalida():
-    """Test que falla con clase inexistente"""
+    # Test que falla con clase inexistente
+    from django.core.exceptions import ValidationError
+    
     payload = {
         "clase": "clase_que_no_existe",
         "nombre_campo": "campo_test",
         "etiqueta": "Test",
     }
     
-    with pytest.raises(ValueError, match="clase.*no existe"):
+    with pytest.raises(ValidationError, match="clase.*no existe"):
         crear_campo_en_pagina("550e8400e29b41d4a716446655440000", payload)

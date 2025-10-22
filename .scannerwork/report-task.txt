@@ -1,6 +1,6 @@
-projectKey=Agroforms-Santa-Ana-Backend-dev
+projectKey=Agroforms-Santa-Ana-Backend-1.0
 serverUrl=http://localhost:9000
 serverVersion=25.3.0.104237
-dashboardUrl=http://localhost:9000/dashboard?id=Agroforms-Santa-Ana-Backend-dev
-ceTaskId=6a385ce0-1f08-4c4d-85a2-477e95aad4aa
-ceTaskUrl=http://localhost:9000/api/ce/task?id=6a385ce0-1f08-4c4d-85a2-477e95aad4aa
+dashboardUrl=http://localhost:9000/dashboard?id=Agroforms-Santa-Ana-Backend-1.0
+ceTaskId=9eb35804-87c4-4e93-89a5-84a05b0c99bb
+ceTaskUrl=http://localhost:9000/api/ce/task?id=9eb35804-87c4-4e93-89a5-84a05b0c99bb
