@@ -98,6 +98,7 @@ class Formulario(models.Model):
 
     disponible_desde_fecha = models.DateField()
     disponible_hasta_fecha = models.DateField()
+    periodicidad = models.IntegerField(null=True, blank=True)
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES)
     forma_envio = models.CharField(max_length=30, choices=ENVIO_CHOICES)
     es_publico = models.BooleanField(default=False)

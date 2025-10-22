@@ -307,25 +307,36 @@ class FormularioViewSet(viewsets.ModelViewSet):
         DELETE /api/formularios/{id}/
         Deletes a complete form with all its related data
         """
-        try:
-            formulario = self.get_object()
-            formulario_id = str(formulario.id)
+        
+        formulario = self.get_object()
+        formulario_id = str(formulario.id)
             
-            self._delete_formulario_cascade(formulario_id)
-            
-            return Response({
-                "detail": f"Formulario {formulario_id} eliminado exitosamente",
-                "deleted_id": formulario_id
-            }, status=status.HTTP_204_NO_CONTENT)
-            
-        except Formulario.DoesNotExist:
+        # 1) ¿Tiene respuestas?
+        total = FormularioEntry.objects.filter(form_id=formulario.id).count()
+        if total > 0:
             return Response(
-                {"detail": "Formulario no encontrado."}, 
-                status=status.HTTP_404_NOT_FOUND
+                {
+                    "detail": "No se puede eliminar: el formulario tiene respuestas en 'formularios_entry'.",
+                    "entries_count": total,
+                    "hint": "Puede suspenderlo para conservar el histórico y bloquear nuevas respuestas."
+                },
+                status=status.HTTP_409_CONFLICT
+            )
+        
+        # 2) Sin respuestas → elimina en cascada como ya lo hacías
+        try:
+            self._delete_formulario_cascade(formulario_id)
+            return Response(
+                {
+                    "detail": f"Formulario {formulario_id} eliminado exitosamente",
+                    "deleted_id": formulario_id
+                },
+                status=status.HTTP_204_NO_CONTENT
             )
         except Exception as e:
+            transaction.set_rollback(True)
             return Response(
-                {"detail": f"Error eliminando formulario: {str(e)}"}, 
+                {"detail": f"Error eliminando formulario: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
