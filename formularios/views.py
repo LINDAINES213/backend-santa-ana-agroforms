@@ -585,6 +585,44 @@ class GrupoViewSet(viewsets.ReadOnlyModelViewSet):
         qs = self.get_queryset()[:50] 
         return Response([{"value": g.id_grupo, "label": g.nombre} for g in qs])
 
+    @extend_schema(
+        tags=["Grupos"], 
+        summary="Obtener grupo por id_campo_group",
+        parameters=[
+            OpenApiParameter(
+                name="id_campo_group",
+                description="UUID del campo group",
+                required=True,
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH
+            )
+        ],
+        responses={
+            200: GrupoSerializer,
+            404: OpenApiResponse(description="Grupo no encontrado")
+        }
+    )
+    @action(detail=False, methods=["get"], url_path="campo/(?P<id_campo_group>[^/.]+)")
+    def by_campo_group(self, request, id_campo_group=None):
+        """
+        Obtener grupo por id_campo_group
+        GET /api/grupos/campo/{id_campo_group}/
+        """
+        try:
+            grupo = Grupo.objects.get(id_campo_group=id_campo_group)
+            serializer = self.get_serializer(grupo)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Grupo.DoesNotExist:
+            return Response(
+                {"detail": "Grupo no encontrado con ese id_campo_group"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Error: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
 @extend_schema_view(
     list=extend_schema(tags=["Asignaciones"]),
     retrieve=extend_schema(tags=["Asignaciones"]),
