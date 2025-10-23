@@ -123,14 +123,6 @@ class UserFormulario(models.Model):
 class FormularioIndexVersion(models.Model):
     id_index_version = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
-    
-    formulario_id = models.ForeignKey(
-        Formulario,
-        on_delete=models.CASCADE,
-        db_column='formulario_id',   
-        related_name='versiones'     
-    )
-
     class Meta:
         # managed = False
         db_table = "formularios_formularioindexversion" 
@@ -156,15 +148,12 @@ class Formulario_Index_Version(models.Model):
 
 class Pagina(models.Model):
     id_pagina = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    index_version = models.ForeignKey(
-        FormularioIndexVersion, on_delete=models.CASCADE, related_name="paginas"
-    )
-    formulario_id = models.ForeignKey(
-        Formulario,
-        on_delete=models.CASCADE,
-        db_column='formulario_id',   
-        related_name="paginas"
-    )
+    # formulario_id = models.ForeignKey(
+    #     Formulario,
+    #     on_delete=models.CASCADE,
+    #     db_column='formulario_id',   
+    #     related_name="paginas"
+    # )
     secuencia = models.PositiveIntegerField(default=1)
     nombre = models.CharField(max_length=120)
     descripcion = models.TextField(blank=True)
@@ -197,11 +186,21 @@ class Pagina_Index_Version(models.Model):
 class PaginaVersion(models.Model):
     id_pagina_version = models.CharField(primary_key=True, max_length=32, db_column="id_pagina_version")
     fecha_creacion = models.DateTimeField(db_column="fecha_creacion")
-    id_pagina = models.CharField(max_length=32, db_column="id_pagina", null=True)
-
+    # ✨ CAMBIO 1: Convertir a ForeignKey real
+    id_pagina = models.ForeignKey(
+        Pagina,
+        on_delete=models.CASCADE,
+        db_column="id_pagina",
+        related_name="versiones_pagina",  # pagina.versiones_pagina.all()
+        null=True
+    )
     class Meta:
         # managed = False
         db_table = "formularios_pagina_version"
+        ordering = ['-fecha_creacion']
+        indexes = [
+            models.Index(fields=['id_pagina', '-fecha_creacion']),
+        ]
 
 
 class ClaseCampo(models.Model):

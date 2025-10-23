@@ -19,6 +19,7 @@ from formularios.azure_storage import AzureBlobStorageService
 
 from .models import (
     Formulario,
+    Formulario_Index_Version,
     FormularioIndexVersion,
     FuenteDatos,
     FuenteDatosValor,
@@ -123,20 +124,11 @@ def _ultima_pagina_version(pagina: Pagina) -> PaginaVersion | None:
 
 @transaction.atomic
 def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Crea Campo (tipo por clase) y publica nueva versión:
-      - nueva FormularioIndexVersion
-      - nueva PaginaVersion (fecha)
-      - NO clona campos existentes, solo agrega el nuevo
-      - actualiza punteros Pagina_Index_Version a la nueva index_version
-    """
     clase = (data.get("clase") or "").strip().lower()
     if not clase:
         raise ValidationError("El campo 'clase' es obligatorio.")
-
     if not ClaseCampo.objects.filter(clase=clase).exists():
         raise ValidationError(f"La clase '{clase}' no existe en formularios_clase_campo.")
-
     tipo = _resolver_tipo_por_clase(clase)
 
     cfg = data.get("config") or {}
@@ -146,6 +138,7 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
         except Exception:
             raise ValidationError("El campo 'config' debe ser JSON válido.")
 
+    # 1) Crear Campo
     campo = Campo.objects.create(
         tipo=tipo,
         clase=clase,
@@ -156,45 +149,81 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
         requerido=bool(data.get("requerido", False)),
     )
 
-    formulario = pagina.formulario_id
-    nueva_version = FormularioIndexVersion.objects.create(formulario_id=formulario)
+    # 2) Resolver versión/formulario actual de ESA página
+    piv_actual = (Pagina_Index_Version.objects
+                  .filter(id_pagina=pagina)
+                  .select_related("id_index_version")
+                  .order_by("-id_index_version__fecha_creacion")
+                  .first())
+    if not piv_actual:
+        # si no hay, creamos una versión inicial del formulario de la página:
+        # asumimos que existe un vínculo en Formulario_Index_Version para cualquier versión nueva
+        fiv_nueva = FormularioIndexVersion.objects.create()  # sin FK directo
+        Pagina_Index_Version.objects.create(id_pagina=pagina, id_index_version=fiv_nueva)
+        piv_actual = Pagina_Index_Version.objects.get(id_pagina=pagina, id_index_version=fiv_nueva)
 
+    fiv_actual = piv_actual.id_index_version
+
+    # 3) Encontrar el formulario al que pertenece esa versión (vía historial)
+    f_link = Formulario_Index_Version.objects.filter(id_index_version=fiv_actual).first()
+    if not f_link:
+        raise ValidationError("No se pudo resolver el formulario para la versión actual de la página.")
+    formulario = f_link.id_formulario
+
+    # 4) Crear NUEVA FormularioIndexVersion (publicación v+1)
+    fiv_nueva = FormularioIndexVersion.objects.create()
+    # registrar en historial
+    Formulario_Index_Version.objects.get_or_create(
+        id_index_version=fiv_nueva,
+        defaults={"id_formulario": formulario},
+    )
+
+    # 5) Nueva PaginaVersion
     prev_pv = _ultima_pagina_version(pagina)
-    nueva_pv = PaginaVersion.objects.create(id_pagina=pagina)
+    nueva_pv = PaginaVersion.objects.create(
+        id_pagina_version=uuid.uuid4().hex,
+        fecha_creacion=timezone.now(),
+        id_pagina=pagina,
+    )
 
+    # 6) Calcular sequence
     max_seq = 0
     if prev_pv:
-        max_seq_result = (PaginaCampo.objects
-                         .filter(id_pagina_version=prev_pv)
-                         .aggregate(max_seq=models.Max('sequence')))
-        max_seq = max_seq_result.get('max_seq') or 0
-
+        max_seq = (PaginaCampo.objects
+                   .filter(id_pagina_version=prev_pv)
+                   .aggregate(max_seq=models.Max('sequence'))
+                   .get('max_seq') or 0)
     sequence = data.get("sequence")
     try:
         sequence = int(sequence) if sequence is not None else None
     except Exception:
         sequence = None
-
     if sequence is None:
         sequence = (max_seq + 1) if max_seq else 1
 
+    # 7) Link campo a nueva versión de la página
     PaginaCampo.objects.create(
         id_campo=campo,
         id_pagina_version=nueva_pv,
         sequence=sequence,
     )
 
-    for p in Pagina.objects.filter(formulario_id=formulario).only("id_pagina"):
+    # 8) Actualizar punteros PIV de TODAS las páginas de ese formulario a la NUEVA versión
+    #    → todas las páginas que estaban apuntando a fiv_actual deben apuntar a fiv_nueva
+    paginas_del_form = (Pagina_Index_Version.objects
+                        .filter(id_index_version=fiv_actual)
+                        .values_list("id_pagina", flat=True))
+    for pid in paginas_del_form:
         Pagina_Index_Version.objects.update_or_create(
-            id_pagina=p,
-            defaults={"id_index_version": nueva_version},
+            id_pagina_id=pid,
+            defaults={"id_index_version": fiv_nueva},
         )
 
     return {
         "campo_id": str(campo.id_campo),
         "formulario_id": str(formulario.id),
         "pagina_id": str(pagina.id_pagina),
-        "nueva_version_id": str(nueva_version.id_index_version),
+        "nueva_version_id": str(fiv_nueva.id_index_version),
         "pagina_version_id": str(nueva_pv.id_pagina_version),
         "sequence": sequence,
     }
@@ -217,20 +246,19 @@ def _uuid32() -> str:
     return uuid.uuid4().hex
 
 def _pagina_version_actual_o_nueva(id_pagina: str) -> PaginaVersion:
-    id_pagina_32 = _uuid32_no_dashes(id_pagina)
-
+    # acepta UUID/str de Página; obtiene objeto y usa FK real
+    from .models import Pagina as PaginaModel
+    pagina_obj = PaginaModel.objects.get(pk=id_pagina)
     pv = (PaginaVersion.objects
-          .filter(id_pagina=id_pagina_32)
+          .filter(id_pagina=pagina_obj)
           .order_by("-fecha_creacion")
           .first())
     if pv:
         return pv
-
-    nuevo_id = _uuid32()  
     pv = PaginaVersion.objects.create(
-        id_pagina_version=nuevo_id,
-        fecha_creacion=timezone.now(),   
-        id_pagina=id_pagina_32,
+        id_pagina_version=uuid.uuid4().hex,   # tu PK char(32)
+        fecha_creacion=timezone.now(),
+        id_pagina=pagina_obj,
     )
     return pv
 
@@ -384,107 +412,92 @@ def duplicar_formulario(formulario: Formulario, nuevo_nombre: str | None = None)
         auto_envio=formulario.auto_envio,
     )
 
-    idx_clon = FormularioIndexVersion.objects.create(formulario_id=clon)
+    # versión nueva para el clon + historial
+    idx_clon = FormularioIndexVersion.objects.create()
+    Formulario_Index_Version.objects.create(id_index_version=idx_clon, id_formulario=clon)
 
-    idx_orig = (FormularioIndexVersion.objects
-                .filter(formulario_id=formulario)
-                .order_by("-fecha_creacion")
-                .first())
-
-    if idx_orig:
+    # última versión del original (por fecha)
+    link_orig = (Formulario_Index_Version.objects
+                 .filter(id_formulario=formulario)
+                 .select_related("id_index_version")
+                 .order_by("-id_index_version__fecha_creacion")
+                 .first())
+    paginas_origen = Pagina.objects.none()
+    if link_orig:
         page_ids = (Pagina_Index_Version.objects
-                    .filter(id_index_version=idx_orig)
+                    .filter(id_index_version=link_orig.id_index_version)
                     .values_list("id_pagina", flat=True))
-        paginas_origen = Pagina.objects.filter(id_pagina__in=page_ids).order_by("secuencia")
-    else:
-        paginas_origen = Pagina.objects.filter(formulario_id=formulario).order_by("secuencia")
+        paginas_origen = Pagina.objects.filter(id_pagina__in=list(page_ids)).order_by("secuencia")
 
+    # clonar páginas
     for p in paginas_origen:
         p_nueva = Pagina.objects.create(
-            index_version=idx_clon,           
-            formulario_id=clon,
             secuencia=p.secuencia,
             nombre=p.nombre,
             descripcion=p.descripcion,
         )
+        Pagina_Index_Version.objects.create(id_pagina=p_nueva, id_index_version=idx_clon)
 
-        Pagina_Index_Version.objects.create(
-            id_pagina=p_nueva,
-            id_index_version=idx_clon,
-        )
-
-        pid32 = _uuid32_no_dashes(str(p.id_pagina))
         pv_orig = (PaginaVersion.objects
-                   .filter(id_pagina=pid32)
+                   .filter(id_pagina=p)
                    .order_by("-fecha_creacion")
                    .first())
 
         pv_nueva = PaginaVersion.objects.create(
-            id_pagina_version=uuid32(uuid.uuid4()),
-            id_pagina=_uuid32_no_dashes(str(p_nueva.id_pagina)),
+            id_pagina_version=uuid.uuid4().hex,
+            id_pagina=p_nueva,
             fecha_creacion=timezone.now(),
         )
 
         if pv_orig:
             links = (PaginaCampo.objects
-                     .filter(id_pagina_version=pv_orig.id_pagina_version)
+                     .filter(id_pagina_version=pv_orig)
                      .order_by("sequence"))
 
             for l in links:
                 c = l.id_campo
-       
-
                 c_nuevo = Campo.objects.create(
-                    id_campo=uuid32(uuid.uuid4()),          
+                    id_campo=uuid.uuid4(),
                     tipo=c.tipo,
                     clase=c.clase,
-                    nombre_campo=c.nombre_campo,       
+                    nombre_campo=c.nombre_campo,
                     etiqueta=c.etiqueta,
                     ayuda=c.ayuda,
                     config=c.config,
                     requerido=c.requerido,
                 )
-
                 PaginaCampo.objects.create(
-                    id_pagina_version=pv_nueva,        
-                    id_campo=c_nuevo,                  
+                    id_pagina_version=pv_nueva,
+                    id_campo=c_nuevo,
                     sequence=l.sequence,
                 )
 
     return clon
 
 def versionar_pagina_sin_clonar(pagina) -> PaginaVersion:
-    """Crea una nueva PaginaVersion para 'pagina' reutilizando los mismos Campo (no clona)."""
-    pid32 = _uuid32_no_dashes(str(pagina.id_pagina))
-
-    prev = (
-        PaginaVersion.objects
-        .filter(id_pagina=pid32)
-        .order_by('-fecha_creacion')
-        .first()
-    )
+    prev = (PaginaVersion.objects
+            .filter(id_pagina=pagina)
+            .order_by('-fecha_creacion')
+            .first())
 
     nueva_pv = PaginaVersion.objects.create(
-        id_pagina_version=uuid32(),
-        id_pagina=pid32,
+        id_pagina_version=uuid.uuid4().hex,
+        id_pagina=pagina,
         fecha_creacion=timezone.now(),
     )
 
     if prev:
-        links = (
-            PaginaCampo.objects
-            .filter(id_pagina_version=prev.id_pagina_version)
-            .order_by('sequence')
-        )
+        links = (PaginaCampo.objects
+                 .filter(id_pagina_version=prev)
+                 .order_by('sequence'))
         PaginaCampo.objects.bulk_create([
             PaginaCampo(
-                id_pagina_version=nueva_pv.id_pagina_version,
-                id_campo=l.id_campo,          
+                id_pagina_version=nueva_pv,
+                id_campo=l.id_campo,
                 sequence=l.sequence
             )
             for l in links
         ])
-
     return nueva_pv
 
 @transaction.atomic

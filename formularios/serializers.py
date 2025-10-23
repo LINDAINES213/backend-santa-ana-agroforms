@@ -4,7 +4,12 @@ from .services import _uuid32_no_dashes, hash_password
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Campo, Categoria, Formulario, FormularioIndexVersion, FuenteDatos, FuenteDatosValor, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
+from .models import (
+    Campo, Categoria, Formulario, FormularioIndexVersion, 
+    FuenteDatos, FuenteDatosValor, Grupo, Pagina, 
+    Pagina_Index_Version, PaginaCampo, PaginaVersion, 
+    UserFormulario, Usuario, Formulario_Index_Version
+)
 from django.db import models
 from django.db.models import Q
 
@@ -195,32 +200,27 @@ class PaginaConCamposSerializer(PaginaSerializer):
         fields = PaginaSerializer.Meta.fields + ("campos",)
 
     def get_campos(self, obj):
-        try:
-            id_pagina_32 = _uuid32_no_dashes(str(obj.id_pagina))
-        except Exception:
-            return []
-
+        # 1) Tomar la última versión de la página (por fecha)
         pv = (PaginaVersion.objects
-            .filter(id_pagina=id_pagina_32)
+            .filter(id_pagina=obj)
             .order_by("-fecha_creacion")
             .first())
         if not pv:
             return []
 
+        # 2) Traer links usando FK (puedes pasar el objeto o _id)
         links = (PaginaCampo.objects
-                .filter(id_pagina_version=pv.id_pagina_version)
+                .filter(id_pagina_version=pv)
                 .select_related("id_campo")
                 .order_by("sequence"))
 
         import json
         from .models import Grupo, CampoGrupo
 
-        def _first(x):
-            return (x[0] if isinstance(x, (list, tuple)) and x else x)
-
         def _cfg_dict(cfg):
             if isinstance(cfg, dict):
                 return cfg
+        # si es str, intenta parsear, si falla -> {}
             if isinstance(cfg, str):
                 try:
                     return json.loads(cfg)
@@ -229,8 +229,6 @@ class PaginaConCamposSerializer(PaginaSerializer):
             return {}
 
         out = []
-        index = {}           
-        seq_by_campo = {}    
         for l in links:
             c = l.id_campo
             cfg = _cfg_dict(c.config)
@@ -245,36 +243,10 @@ class PaginaConCamposSerializer(PaginaSerializer):
                 "config": cfg,
             }
             out.append(d)
-            index[d["id_campo"]] = d
-            seq_by_campo[d["id_campo"]] = l.sequence
 
-            if (c.clase or "").lower() == "dataset":
-                ds = (cfg or {}).get("dataset", {}) if isinstance(cfg, dict) else {}
-                cache_inline = bool(ds.get("cache_inline", True))
-                max_items = int(ds.get("max_items_inline", 300) or 300)
-
-                if cache_inline:
-                    qs = FuenteDatosValor.objects.filter(campo=c).order_by("label_text")
-                    total = qs.count()
-                    if total <= max_items:
-                        mode = (ds.get("mode") or "pair").lower()
-                        if mode == "pair":
-                            d["options"] = [
-                                {"value": r.key_text, "label": r.label_text}
-                                for r in qs.iterator()
-                            ]
-                        else:  # single
-                            d["options"] = [
-                                {"value": r.label_text, "label": r.label_text}
-                                for r in qs.iterator()
-                            ]
-                        d["options_count"] = total
-                        
-            
-
+        # --- grupos (igual que antes, pero sin tocar id_pagina_version como texto)
         index = {d["id_campo"]: d for d in out}
         seq_by_campo = {d["id_campo"]: d.get("sequence", 10**9) for d in out}
-
         child_ids = set()
 
         for d in out:
@@ -287,18 +259,14 @@ class PaginaConCamposSerializer(PaginaSerializer):
                 d["children"] = []
                 continue
 
-
-            miembros_qs = (CampoGrupo.objects
-                        .filter(id_grupo=g)
-                        .values_list("id_campo_id", flat=True))
-
-            miembros_ids = [str(cid) for cid in miembros_qs]
-
-            hijos = [index[cid] for cid in miembros_ids if cid in index]
-
+            miembros_ids = list(
+                CampoGrupo.objects
+                .filter(id_grupo=g)
+                .values_list("id_campo_id", flat=True)
+            )
+            hijos = [index[cid] for cid in map(str, miembros_ids) if cid in index]
             hijos.sort(key=lambda h: seq_by_campo.get(h["id_campo"], 10**9))
             d["children"] = hijos
-
             child_ids.update([h["id_campo"] for h in hijos])
 
         if child_ids:
@@ -318,22 +286,27 @@ class FormularioSerializer(serializers.ModelSerializer):
         return obj.categoria.nombre if obj.categoria else None
 
     def get_paginas(self, obj):
-        last_version = (
-            FormularioIndexVersion.objects
-            .filter(formulario_id=obj)
-            .order_by("-fecha_creacion")
+        # 1) Última versión por fecha de creación
+        link = (
+            Formulario_Index_Version.objects
+            .filter(id_formulario=obj)
+            .select_related("id_index_version")
+            .order_by("-id_index_version__fecha_creacion")
             .first()
         )
-        if not last_version:
+        if not link:
             return []
 
+        last_version = link.id_index_version  # instancia de FormularioIndexVersion
+
+        # 2) Todas las páginas enlazadas a esa versión
         page_ids = (
             Pagina_Index_Version.objects
             .filter(id_index_version=last_version)
             .values_list("id_pagina", flat=True)
         )
 
-        qs = Pagina.objects.filter(id_pagina__in=page_ids).order_by("secuencia")
+        qs = Pagina.objects.filter(id_pagina__in=list(page_ids)).order_by("secuencia")
         return PaginaConCamposSerializer(qs, many=True, context=self.context).data
 
 class UsuarioDetalleSerializer(serializers.ModelSerializer):

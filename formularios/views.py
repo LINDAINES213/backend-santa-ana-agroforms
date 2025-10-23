@@ -373,44 +373,56 @@ class FormularioViewSet(viewsets.ModelViewSet):
             )
 
     def _delete_formulario_cascade(self, formulario_id: str):
-            """
-            Elimina un formulario y TODA su jerarquía usando ORM (orden seguro).
-            Compatible con PostgreSQL y evita SQL específico de SQL Server.
-            """
-            with transaction.atomic():
-                form = Formulario.objects.get(pk=formulario_id)
+        """
+        Elimina un formulario y TODA su jerarquía usando el nuevo esquema:
+        Formulario -> (historial) Formularios_Index_Version -> Pagina_Index_Version -> Pagina/Versiones/Campos
+        """
+        with transaction.atomic():
+            form = Formulario.objects.get(pk=formulario_id)
 
-                pages = list(Pagina.objects.filter(formulario_id=form).only("id_pagina"))
-                page_ids = [p.id_pagina for p in pages]
-                page_ids_32 = [uuid.UUID(str(pid)).hex for pid in page_ids]  
+            # 1) versiones del formulario (via historial)
+            fiv_ids = list(
+                Formulario_Index_Version.objects
+                .filter(id_formulario=form)
+                .values_list("id_index_version", flat=True)
+            )
 
-                pv_qs = PaginaVersion.objects.filter(id_pagina__in=page_ids_32)
-                pv_ids = list(pv_qs.values_list("id_pagina_version", flat=True))
+            # 2) páginas del formulario (via punteros a cada versión)
+            page_ids = list(
+                Pagina_Index_Version.objects
+                .filter(id_index_version_id__in=fiv_ids)
+                .values_list("id_pagina", flat=True)
+            )
 
-                if pv_ids:
-                    PaginaCampo.objects.filter(id_pagina_version_id__in=pv_ids).delete()
+            # 3) pagina_version ids (con FK real a Pagina)
+            pv_ids = list(
+                PaginaVersion.objects
+                .filter(id_pagina_id__in=page_ids)
+                .values_list("id_pagina_version", flat=True)
+            )
 
-                Campo.objects.filter(enlaces_pagina__isnull=True).delete()
+            # 4) borrar links campo<->pagina_version
+            if pv_ids:
+                PaginaCampo.objects.filter(id_pagina_version_id__in=pv_ids).delete()
 
-                try:
-                    from .models import PaginaIndexVersion
-                    if pages:
-                        PaginaIndexVersion.objects.filter(id_pagina__in=pages).delete()
-                except Exception:
-                    pass
+            # 5) borrar pagina_version
+            PaginaVersion.objects.filter(id_pagina_id__in=page_ids).delete()
 
-                pv_qs.delete()
+            # 6) (opcional) borrar campos huérfanos
+            Campo.objects.filter(enlaces_pagina__isnull=True).delete()
 
-                if page_ids:
-                    Pagina.objects.filter(id_pagina__in=page_ids).delete()
+            # 7) borrar punteros página<->versión y páginas
+            if page_ids:
+                Pagina_Index_Version.objects.filter(id_pagina_id__in=page_ids).delete()
+                Pagina.objects.filter(id_pagina__in=page_ids).delete()
 
-                fiv_qs = FormularioIndexVersion.objects.filter(formulario_id=form)
-                if fiv_qs.exists():
-                    Formulario_Index_Version.objects.filter(id_index_version__in=fiv_qs).delete()
+            # 8) borrar historial y versiones
+            if fiv_ids:
+                Formulario_Index_Version.objects.filter(id_index_version_id__in=fiv_ids).delete()
+                FormularioIndexVersion.objects.filter(pk__in=fiv_ids).delete()
 
-                fiv_qs.delete()
-
-                form.delete()
+            # 9) por último, el formulario
+            form.delete()
 
     @extend_schema(tags=["Páginas"], summary="Agregar nueva página al formulario")
     @action(detail=True, methods=['post'], url_path='agregar-pagina')
@@ -419,30 +431,43 @@ class FormularioViewSet(viewsets.ModelViewSet):
         formulario = self.get_object()
         bump = request.query_params.get("bump", "1") != "0"
 
-        ultima_version = (
-            FormularioIndexVersion.objects
-            .filter(formulario_id=formulario).order_by('-fecha_creacion').first()
-        ) or FormularioIndexVersion.objects.create(formulario_id=formulario)
+        # última versión del formulario por fecha
+        link = (Formulario_Index_Version.objects
+                .filter(id_formulario=formulario)
+                .select_related("id_index_version")
+                .order_by("-id_index_version__fecha_creacion")
+                .first())
+
+        if link:
+            ultima_version = link.id_index_version
+        else:
+            ultima_version = FormularioIndexVersion.objects.create()
+            Formulario_Index_Version.objects.create(id_index_version=ultima_version, id_formulario=formulario)
 
         version_destino = ultima_version
         if bump:
-            version_destino = FormularioIndexVersion.objects.create(formulario_id=formulario)
-            for p in Pagina.objects.filter(formulario_id=formulario).only("id_pagina"):
+            version_destino = FormularioIndexVersion.objects.create()
+            Formulario_Index_Version.objects.create(id_index_version=version_destino, id_formulario=formulario)
+            # mover punteros de TODAS las páginas del form a la nueva versión
+            page_ids = (Pagina_Index_Version.objects
+                        .filter(id_index_version=ultima_version)
+                        .values_list("id_pagina", flat=True))
+            for pid in page_ids:
                 Pagina_Index_Version.objects.update_or_create(
-                    id_pagina=p,
+                    id_pagina_id=pid,
                     defaults={"id_index_version": version_destino},
                 )
 
-        last_seq = (
-            Pagina.objects.filter(formulario_id=formulario)
-            .aggregate(max_seq=models.Max("secuencia"))
-            .get("max_seq") or 0
-        )
+        # secuencia = max + 1 entre páginas del formulario (en la versión destino)
+        last_seq = (Pagina.objects
+                    .filter(id_pagina__in=Pagina_Index_Version.objects
+                            .filter(id_index_version=version_destino)
+                            .values_list("id_pagina", flat=True))
+                    .aggregate(max_seq=models.Max("secuencia"))
+                    .get("max_seq") or 0)
         secuencia = last_seq + 1
 
         nueva_pagina = Pagina.objects.create(
-            index_version=version_destino,     
-            formulario_id=formulario,
             secuencia=secuencia,
             nombre=request.data.get('nombre', 'Nueva página'),
             descripcion=request.data.get('descripcion', ''),
@@ -455,7 +480,7 @@ class FormularioViewSet(viewsets.ModelViewSet):
 
         PaginaVersion.objects.create(
             id_pagina_version=_uuid32(),
-            id_pagina=_uuid32_no_dashes(str(nueva_pagina.id_pagina)),
+            id_pagina=nueva_pagina,
             fecha_creacion=timezone.now(),
         )
 
