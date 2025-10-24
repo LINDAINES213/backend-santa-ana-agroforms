@@ -1,6 +1,6 @@
 # serializers.py
 import json
-from .services import _uuid32_no_dashes, hash_password
+from .services import _uuid32_no_dashes, fetch_items_from_fdv_by_campo, hash_password
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
@@ -242,6 +242,36 @@ class PaginaConCamposSerializer(PaginaSerializer):
                 "requerido": c.requerido,
                 "config": cfg,
             }
+            if (c.clase or "").lower() == "dataset":
+                # Soporta tanto config plano como anidado bajo 'dataset'
+                ds = cfg.get("dataset") or {}
+                # parámetros opcionales
+                fuente_id = ds.get("fuente_id")  # si lo guardas en config, se respeta
+                label_col = ds.get("label_column") or ds.get("column")
+                mode = (ds.get("mode") or "pair").lower()          # "pair" o "list"
+                cache_inline = bool(ds.get("cache_inline", True))
+                max_items = ds.get("max_items_inline", 300)
+
+                if cache_inline:
+                    items_pair = fetch_items_from_fdv_by_campo(
+                        campo_id=str(c.id_campo),
+                        label_column=label_col,
+                        fuente_id=fuente_id,
+                        limit=max_items,
+                    )
+
+                    if mode == "pair":
+                        # [{"key": "...", "label": "..."}]
+                        cfg["items"] = items_pair
+                    else:
+                        # ["label1", "label2", ...]
+                        cfg["items"] = [it["label"] for it in items_pair if it.get("label")]
+
+                # reinyecta dataset normalizado (por si hiciste cambios)
+                cfg["dataset"] = ds
+
+            # finalmente
+            d["config"] = cfg
             out.append(d)
 
         # --- grupos (igual que antes, pero sin tocar id_pagina_version como texto)

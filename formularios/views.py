@@ -1,3 +1,4 @@
+import json
 from formularios.exports import content_bytes_para_un_form, excel_bytes_para_un_form, zip_bytes_todos_los_forms
 from .services import _uuid32, _uuid32_no_dashes, crear_campo_en_pagina
 from rest_framework import status, filters, viewsets
@@ -252,7 +253,6 @@ class PaginaViewSet(viewsets.ModelViewSet):
         data = PaginaConCamposSerializer(pagina, context=self.get_serializer_context()).data
         return Response(data.get("campos", []), status=status.HTTP_200_OK)
 
-    @extend_schema(tags=["Campos"], summary="Agregar campo a la página")
     @action(detail=True, methods=["post"], url_path="campos")
     def agregar_campo(self, request, id_pagina=None):
         id32 = _uuid32_no_dashes(str(id_pagina))
@@ -260,9 +260,8 @@ class PaginaViewSet(viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         try:
             out = crear_campo_en_pagina(id32, ser.validated_data)
-            
+
             gid = request.data.get("grupo")  # <- ÚNICA fuente del grupo
-           
             if gid:
                 # 1) Verificar que el grupo existe
                 try:
@@ -283,7 +282,32 @@ class PaginaViewSet(viewsets.ModelViewSet):
                     id_campo_id=str(campo_id)
                 )
 
+                # 3) Inyectar id_grupo en el config del campo (sin importar si ya hay otros keys)
+                try:
+                    campo = Campo.objects.get(pk=str(campo_id))
+                except Campo.DoesNotExist:
+                    return Response({"detail": "Campo recién creado no encontrado."}, status=500)
+
+                # No tiene sentido poner id_grupo en el propio campo 'group'
+                if (campo.clase or "").lower() != "group":
+                    try:
+                        cfg = json.loads(campo.config) if campo.config else {}
+                        if not isinstance(cfg, dict):
+                            cfg = {}
+                    except Exception:
+                        cfg = {}
+
+                    # siempre sincronizar con el gid recibido
+                    cfg["id_grupo"] = str(g.id_grupo)
+
+                    campo.config = json.dumps(cfg, ensure_ascii=False)
+                    campo.save(update_fields=["config"])
+
+                    # opcional: reflejarlo también en la respuesta
+                    out["id_grupo"] = str(g.id_grupo)
+
             return Response(out, status=status.HTTP_201_CREATED)
+
         except Exception as e:
             transaction.set_rollback(True)
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)

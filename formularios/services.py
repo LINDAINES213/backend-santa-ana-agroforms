@@ -13,6 +13,8 @@ from django.utils import timezone
 import re
 from argon2.low_level import hash_secret, verify_secret, Type
 from os import urandom
+
+from typing import List, Dict, Any, Optional
 import pandas as pd
 
 from formularios.azure_storage import AzureBlobStorageService
@@ -662,3 +664,27 @@ def _materializar_dataset_para_campo(cfg: dict, campo):
     cfg["dataset"] = ds
 
     return len(rows)
+
+def fetch_items_from_fdv_by_campo(
+    campo_id: str,
+    label_column: Optional[str] = None,
+    fuente_id: Optional[str] = None,
+    limit: Optional[int] = 300,
+) -> List[Dict[str, Any]]:
+    """
+    Devuelve pares {key, label} desde formularios_fuente_datos_valor
+    filtrando por campo_id y, si se especifica, por fuente_id y/o columna.
+    """
+    qs = FuenteDatosValor.objects.filter(campo_id=str(campo_id))
+    if fuente_id:
+        qs = qs.filter(fuente_id=str(fuente_id))
+    if label_column:
+        qs = qs.filter(columna=label_column)
+
+    qs = qs.values("key_text", "label_text").order_by("label_text")
+    if limit and limit > 0:
+        qs = qs[:limit]
+
+    # normaliza a pares {key,label}
+    out = [{"key": r["key_text"], "label": r["label_text"]} for r in qs]
+    return out
