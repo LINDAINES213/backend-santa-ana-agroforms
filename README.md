@@ -65,7 +65,13 @@ AZURE_ACCOUNT_KEY=KEY
 
 ## 🐳 Imagen desde Docker Hub
 
-Como primer paso se debe tener descargado e instalado Docker Desktop. Luego de tenerlo listo ejecutar los siguientes comandos desde PowerShell:
+Es posible ejecutar la API con la imagen almacenada en Docker Hub de manera local en nuestro equipo. Para ello se necesita tener Docker Desktop instalado y corriendo, ya con ello se puede proceder a realizar el pull de la imagen de las siguientes formas:
+
+> Nota: Tomar en cuenta que ambas formas se deben ejecutar o crear el archivo `.yml` dentro de la carpeta donde se encuentre las credencuales en el archivo .env
+
+### >_ PowerShell
+
+Al tener listo Docker Desktop se deben ejecutar los siguientes comandos desde PowerShell:
 
 ```bash
 docker pull lindain1333/santa-ana-api
@@ -79,13 +85,46 @@ docker run -d `
   lindain1333/santa-ana-api:latest `
   python manage.py runserver 0.0.0.0:8082
 ```
-> Si se usa el puerto 8082 visualizar la API en [http://localhost:8082/api/docs](http://localhost:8082/api/docs), sino reemplazar por el puerto que se coloque
 
-> Nota: Tomar en cuenta que se debe ejecutar dentro de la carpeta que se encuentre las credencuales en el archivo .env
+### 🐋 Docker Compose
+
+Para utilizar Docker Compose debemos empezar creando nuestro archivo `docker-compose.yml` de la siguiente manera:
+
+```bash
+services:
+  api:
+    image: lindain1333/santa-ana-api:latest
+    container_name: agroforms-api2
+    env_file: .env
+    ports:
+      - "${PORT:-8082}:8082"
+    command: >
+      sh -c "
+        python manage.py migrate &&
+        python manage.py collectstatic --noinput || true &&
+        python manage.py runserver 0.0.0.0:${PORT:-8082}
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-8082}/api/docs >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+```
+
+Luego de ello ejecutamos los siguientes comandos:
+
+```bash
+docker compose up -d
+docker compose logs -f api         
+```
+
+> Si se usa el puerto 8082 en cualquiera de los dos casos anteriores visualizar la API en [http://localhost:8082/api/docs](http://localhost:8082/api/docs), sino reemplazar por el puerto que se coloque
 
 ---
 
 ## 💻 Desarrollo local (sin Docker)
+
+Si se quiere clonar el proyeto completo desde GitHub se debe abrir una terminal dentro de la carpeta del proyecto y correr los siguientes comandos:
 
 ```bash
 python -m venv venv
@@ -101,7 +140,7 @@ Visita: [http://localhost:8081/api/docs](http://localhost:8081/api/docs)
 
 ## 🚀 API Desplegada
 
-Visita: [https://santa-ana-api.onrender.com/api/docs](https://santa-ana-api.onrender.com/api/docs). Considerar que se debe usar la ruta de autenticación login con usuario y contraseña, y el access_token devuelto introducirse en la sección de BearerAuth para que se pueda tener acceso al uso de rutas.
+Visita: [https://santa-ana-api.onrender.com/api/docs](https://santa-ana-api.onrender.com/api/docs). Considerar que se debe usar la ruta de autenticación login con usuario y contraseña, y el access_token devuelto introducirse en la sección de Authorize → BearerAuth para que se pueda tener acceso al uso de rutas.
 
 ---
 
