@@ -45,6 +45,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://santa-ana-forms.web.app",
+    "https://santa-ana-frontend-prod-h5ycrgmwda-uc.a.run.app/"
 ]
 
 # Application definition

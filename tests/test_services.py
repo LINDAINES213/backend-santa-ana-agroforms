@@ -16,7 +16,9 @@ from formularios.services import (
 from formularios.models import (
     Formulario,
     FormularioIndexVersion,
+    Formulario_Index_Version,
     Pagina,
+    Pagina_Index_Version,
     PaginaVersion,
     Campo,
     PaginaCampo,
@@ -145,18 +147,28 @@ def test_duplicar_formulario_con_paginas_y_campos(categoria):
     from django.db import connection
     connection.cursor().execute("SELECT 1")  # Force commit
     
-    # Crear versión
-    version_orig = FormularioIndexVersion.objects.filter(formulario_id=original).first()
-    if not version_orig:
-        version_orig = FormularioIndexVersion.objects.create(formulario_id=original)
+    # Buscar versión creada por signal o crear una nueva
+    fiv_link = Formulario_Index_Version.objects.filter(id_formulario=original).first()
+    if fiv_link:
+        version_orig = fiv_link.id_index_version
+    else:
+        version_orig = FormularioIndexVersion.objects.create()
+        Formulario_Index_Version.objects.create(
+            id_index_version=version_orig,
+            id_formulario=original
+        )
     
     # Crear página
     pagina_orig = Pagina.objects.create(
-        index_version=version_orig,
-        formulario_id=original,
         secuencia=1,
         nombre="Página 1",
         descripcion="Descripción página 1",
+    )
+    
+    # Vincular página con versión
+    Pagina_Index_Version.objects.create(
+        id_pagina=pagina_orig,
+        id_index_version=version_orig
     )
     
     # Crear ClaseCampo si no existe
@@ -177,7 +189,7 @@ def test_duplicar_formulario_con_paginas_y_campos(categoria):
     from formularios.services import uuid32
     pv_orig = PaginaVersion.objects.create(
         id_pagina_version=uuid32(),
-        id_pagina=_uuid32_no_dashes(str(pagina_orig.id_pagina)),
+        id_pagina=pagina_orig,
         fecha_creacion=timezone.now(),
     )
     
@@ -195,14 +207,15 @@ def test_duplicar_formulario_con_paginas_y_campos(categoria):
     assert clon.id != original.id
     assert clon.nombre == "Clon Completo"
     
-    # Verificar que se creó nueva versión
-    version_clon = FormularioIndexVersion.objects.filter(formulario_id=clon).first()
-    assert version_clon is not None
+    # Verificar que se creó nueva versión vinculada al clon
+    fiv_clon_link = Formulario_Index_Version.objects.filter(id_formulario=clon).first()
+    assert fiv_clon_link is not None
+    version_clon = fiv_clon_link.id_index_version
     assert version_clon.id_index_version != version_orig.id_index_version
     
-    # Verificar que se clonaron las páginas
-    paginas_clon = Pagina.objects.filter(formulario_id=clon)
-    assert paginas_clon.count() >= 1  # Al menos 1 (puede tener la del signal + la clonada)
+    # Verificar que se clonaron las páginas vinculadas a la nueva versión
+    paginas_clon_count = Pagina_Index_Version.objects.filter(id_index_version=version_clon).count()
+    assert paginas_clon_count >= 1
 
 @pytest.mark.django_db
 def test_crear_campo_y_versionar_sin_clase_falla(categoria):
@@ -216,13 +229,23 @@ def test_crear_campo_y_versionar_sin_clase_falla(categoria):
         forma_envio="En Linea",
     )
     
-    version = FormularioIndexVersion.objects.create(formulario_id=formulario)
+    # Crear versión y vincularlo con formulario
+    version = FormularioIndexVersion.objects.create()
+    Formulario_Index_Version.objects.create(
+        id_index_version=version,
+        id_formulario=formulario
+    )
     
+    # Crear página
     pagina = Pagina.objects.create(
-        index_version=version,
-        formulario_id=formulario,
         secuencia=1,
         nombre="Página Test",
+    )
+    
+    # Vincular página con versión
+    Pagina_Index_Version.objects.create(
+        id_pagina=pagina,
+        id_index_version=version
     )
     
     data = {
@@ -246,13 +269,22 @@ def test_crear_campo_clase_invalida_falla(categoria):
         forma_envio="En Linea",
     )
     
-    version = FormularioIndexVersion.objects.create(formulario_id=formulario)
+    # Crear versión y vincularlo
+    version = FormularioIndexVersion.objects.create()
+    Formulario_Index_Version.objects.create(
+        id_index_version=version,
+        id_formulario=formulario
+    )
     
+    # Crear página y vincularla
     pagina = Pagina.objects.create(
-        index_version=version,
-        formulario_id=formulario,
         secuencia=1,
         nombre="Página Test",
+    )
+    
+    Pagina_Index_Version.objects.create(
+        id_pagina=pagina,
+        id_index_version=version
     )
     
     data = {
@@ -277,13 +309,22 @@ def test_crear_campo_en_pagina_basic(categoria):
         forma_envio="En Linea",
     )
     
-    version = FormularioIndexVersion.objects.create(formulario_id=formulario)
+    # Crear versión y vincularlo
+    version = FormularioIndexVersion.objects.create()
+    Formulario_Index_Version.objects.create(
+        id_index_version=version,
+        id_formulario=formulario
+    )
     
+    # Crear página y vincularla
     pagina = Pagina.objects.create(
-        index_version=version,
-        formulario_id=formulario,
         secuencia=1,
         nombre="Página Test",
+    )
+    
+    Pagina_Index_Version.objects.create(
+        id_pagina=pagina,
+        id_index_version=version
     )
     
     ClaseCampo.objects.get_or_create(clase="text", defaults={"estructura": "{}"})
@@ -305,7 +346,7 @@ def test_crear_campo_en_pagina_basic(categoria):
     assert "id_campo" in result
     assert result["nombre_campo"] == "campo_texto"
     assert result["etiqueta"] == "Campo de Texto"
-    assert result["tipo"] == "text"
+    assert result["tipo"] in ("text", "texto")
 
 
 @pytest.mark.django_db

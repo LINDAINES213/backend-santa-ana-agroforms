@@ -8,6 +8,7 @@ from formularios.models import (
     Categoria, 
     Formulario, 
     FormularioIndexVersion,
+    Formulario_Index_Version,
     Usuario,
     FuenteDatos,
     Grupo,
@@ -60,7 +61,7 @@ def drf_allow_any_permissions(settings):
 
 @pytest.fixture
 def formulario(db, categoria):
-    return Formulario.objects.create(
+    formulario = Formulario.objects.create(
         categoria=categoria,
         nombre="Formulario",
         descripcion="",
@@ -73,14 +74,35 @@ def formulario(db, categoria):
         es_publico=False,
         auto_envio=False,
     )
+    
+    # Esperar a que se ejecute el signal
+    connection.cursor().execute("SELECT 1")
+    
+    # Verificar si el signal creó la versión, si no, crearla manualmente
+    fiv_link = Formulario_Index_Version.objects.filter(id_formulario=formulario).first()
+    if not fiv_link:
+        version = FormularioIndexVersion.objects.create()
+        Formulario_Index_Version.objects.create(
+            id_index_version=version,
+            id_formulario=formulario
+        )
+    
+    return formulario
 
 @pytest.fixture
 def version(db, formulario):
     # Intentar obtener la versión creada por el signal primero
-    existing_version = FormularioIndexVersion.objects.filter(formulario_id=formulario).first()
-    if existing_version:
-        return existing_version
-    return FormularioIndexVersion.objects.create(formulario_id=formulario)
+    fiv_link = Formulario_Index_Version.objects.filter(id_formulario=formulario).first()
+    if fiv_link:
+        return fiv_link.id_index_version
+    
+    # Si no existe, crear nueva versión y vincularla
+    nueva_version = FormularioIndexVersion.objects.create()
+    Formulario_Index_Version.objects.create(
+        id_index_version=nueva_version,
+        id_formulario=formulario
+    )
+    return nueva_version
 
 @pytest.fixture
 def authenticated_user(db):
