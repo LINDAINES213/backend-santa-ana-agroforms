@@ -21,6 +21,8 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import serializers, viewsets
+from django.shortcuts import get_object_or_404
+
 
 
 @extend_schema_view(
@@ -253,64 +255,56 @@ class PaginaViewSet(viewsets.ModelViewSet):
         data = PaginaConCamposSerializer(pagina, context=self.get_serializer_context()).data
         return Response(data.get("campos", []), status=status.HTTP_200_OK)
 
+    @extend_schema(tags=["Campos"], summary="Agregar campo a la página")
     @action(detail=True, methods=["post"], url_path="campos")
     def agregar_campo(self, request, id_pagina=None):
-        id32 = _uuid32_no_dashes(str(id_pagina))
+        """
+        Crea un campo en la página y (opcionalmente) lo asocia a un grupo.
+        - NO escribe id_grupo en el config de los campos hijos.
+        - La relación group-child vive SOLO en la tabla pivote.
+        """
+
         ser = CrearCampoEnPaginaSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        try:
-            out = crear_campo_en_pagina(id32, ser.validated_data)
 
-            gid = request.data.get("grupo")  # <- ÚNICA fuente del grupo
-            if gid:
-                # 1) Verificar que el grupo existe
+        # 1) Crear el campo en la página
+        out = crear_campo_en_pagina(str(id_pagina), ser.validated_data)
+
+        # 2) Buscar el campo recién creado
+        campo = get_object_or_404(Campo, id_campo=out["id_campo"])
+
+        # 3) Resolver id de grupo SOLO desde el request (grupo | id_grupo | config.id_group)
+        gid = request.data.get("grupo") or request.data.get("id_grupo")
+        if not gid:
+            cfg_in = request.data.get("config") or {}
+            if isinstance(cfg_in, str):
                 try:
-                    g = Grupo.objects.get(pk=str(gid))
-                except Grupo.DoesNotExist:
-                    return Response(
-                        {"detail": f"El grupo '{gid}' no existe. Crea primero el campo de clase 'group'."},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                    cfg_in = json.loads(cfg_in)
+                except Exception:
+                    cfg_in = {}
+            if isinstance(cfg_in, dict):
+                v = cfg_in.get("id_group") or cfg_in.get("id_grupo")
+                if isinstance(v, (list, tuple)) and v:
+                    gid = v[0]
+                elif isinstance(v, str):
+                    gid = v
 
-                # 2) Enlazar en formularios_campo_grupo
-                campo_id = out.get("id_campo") or out.get("campo_id")
-                if not campo_id:
-                    return Response({"detail": "No se pudo resolver id_campo creado."}, status=500)
+        # 4) Si hay grupo y el campo NO es 'group', crear SOLO la relación en la pivote
+        if gid and (campo.clase or "").lower() != "group":
+            try:
+                # validar UUID
+                _ = uuid.UUID(str(gid))
+                grupo = get_object_or_404(Grupo, id_grupo=str(gid))
+                CampoGrupo.objects.get_or_create(id_campo=campo, id_grupo=grupo)
+                # No tocar campo.config ✅
+                # (opcional) incluir id del grupo en la respuesta, pero no en config
+                out["id_grupo"] = str(grupo.id_grupo)
+            except Exception:
+                return Response({"detail": "El id_grupo no existe o no es válido."},
+                                status=status.HTTP_400_BAD_REQUEST)
 
-                CampoGrupo.objects.get_or_create(
-                    id_grupo=g,
-                    id_campo_id=str(campo_id)
-                )
+        return Response(out, status=status.HTTP_201_CREATED)
 
-                # 3) Inyectar id_grupo en el config del campo (sin importar si ya hay otros keys)
-                try:
-                    campo = Campo.objects.get(pk=str(campo_id))
-                except Campo.DoesNotExist:
-                    return Response({"detail": "Campo recién creado no encontrado."}, status=500)
-
-                # No tiene sentido poner id_grupo en el propio campo 'group'
-                if (campo.clase or "").lower() != "group":
-                    try:
-                        cfg = json.loads(campo.config) if campo.config else {}
-                        if not isinstance(cfg, dict):
-                            cfg = {}
-                    except Exception:
-                        cfg = {}
-
-                    # siempre sincronizar con el gid recibido
-                    cfg["id_grupo"] = str(g.id_grupo)
-
-                    campo.config = json.dumps(cfg, ensure_ascii=False)
-                    campo.save(update_fields=["config"])
-
-                    # opcional: reflejarlo también en la respuesta
-                    out["id_grupo"] = str(g.id_grupo)
-
-            return Response(out, status=status.HTTP_201_CREATED)
-
-        except Exception as e:
-            transaction.set_rollback(True)
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         
 
@@ -860,7 +854,7 @@ class EntryExportViewSet(viewsets.GenericViewSet):
     lookup_field = "form_id"
 
     # --- detalle: /api/entries/{form_id}/export/ ---
-    @extend_schema(
+    @extend_schema(tags=["Exportación"],
         parameters=[
             OpenApiParameter(
                 name="fmt",                                   # <-- 'fmt' en vez de 'format'
@@ -878,6 +872,7 @@ class EntryExportViewSet(viewsets.GenericViewSet):
         ],
         responses={200: OpenApiResponse(description="Archivo", response=OpenApiTypes.BINARY)},
     )
+
     @action(detail=True, methods=["get"], url_path="export")
     def export_one(self, request, form_id=None):
         fmt = (request.query_params.get("fmt") or "xlsx").lower()   # <--- antes era 'format'
@@ -890,6 +885,7 @@ class EntryExportViewSet(viewsets.GenericViewSet):
 
     # --- listado meta: /api/entries/ ---
     @extend_schema(
+        tags=["Exportación"],
         operation_id="entries_list_meta",
         summary="Listar formularios (meta)",
         description="Devuelve form_id, form_name y número de respuestas.",
@@ -905,6 +901,7 @@ class EntryExportViewSet(viewsets.GenericViewSet):
 
     # --- masivo: /api/entries/export-all/ ---
     @extend_schema(
+        tags=["Exportación"],
         operation_id="entries_export_all",
         summary="Exportar todos los formularios (ZIP)",
         description="ZIP con un archivo por formulario en el formato elegido.",

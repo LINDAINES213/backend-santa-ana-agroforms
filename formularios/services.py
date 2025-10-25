@@ -341,14 +341,28 @@ def crear_campo_en_pagina(id_pagina: str, payload: dict) -> dict:
         campo.save(update_fields=["config"])
 
     elif clase == "group":
-        # NINGUNA referencia a grupo en config
-        # Creamos/actualizamos el registro de Grupo usando este Campo como id_campo_group
+    # 1) Crear/actualizar el Grupo para este campo "group"
         nombre_grupo = (etiqueta or nombre_campo or "Grupo")[:150]
-        Grupo.objects.update_or_create(
+        g, _created = Grupo.objects.update_or_create(
             id_campo_group=campo,
             defaults={"nombre": nombre_grupo},
         )
-        # NO escribir id_group ni name en campo.config
+
+        # 2) Asegurar que el config sea dict
+        if not isinstance(cfg_dict, dict):
+            cfg_dict = {}
+
+        # 3) Inyectar en config los metadatos mínimos del grupo
+        #    - id_group siempre debe reflejar el UUID real
+        #    - name por conveniencia para el front
+        #    - fieldCondition default vacío si no existe
+        cfg_dict["id_group"] = str(g.id_grupo)
+        cfg_dict.setdefault("name", nombre_grupo)
+        cfg_dict.setdefault("fieldCondition", "")
+
+        # 4) Persistir el config actualizado en el Campo
+        campo.config = json.dumps(cfg_dict, ensure_ascii=False)
+        campo.save(update_fields=["config"])
 
     # -------- 5) Obtener/crear la PaginaVersion destino y calcular sequence ----------
     pv = _pagina_version_actual_o_nueva(id_pagina)
