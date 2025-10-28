@@ -3,14 +3,17 @@ from datetime import date, timedelta
 from locust import HttpUser, task, between, events
 import gevent.lock
 
-HOST = os.getenv("HOST", "https://santa-ana-api.onrender.com")
-
+HOST = os.getenv("HOST", "http://127.0.0.1:8081")
 LOGIN_PATH = "/api/auth/login/"
-FORM_BASE  = "/api/formularios/"
-PAGE_BASE  = "/api/paginas/"
-PAGE_ADD_FIELD_ACTION = "campos"   # /api/paginas/{id}/campos/
+TOKEN_PREFIX = os.getenv("TOKEN_PREFIX", "Bearer")
 
-# ---- Parseo de credenciales (user:pass,user2:pass2,...) ----
+CATEGORY_BASE = "/api/categorias/"
+FORM_BASE     = "/api/formularios/"
+PAGE_BASE     = "/api/paginas/"
+FIELD_BASE    = "/api/campos/"
+PAGE_ADD_FIELD_ACTION = "campos"
+
+# ====== credenciales ======
 CRED_LIST = []
 @events.test_start.add_listener
 def _parse_creds(environment, **kw):
@@ -20,119 +23,139 @@ def _parse_creds(environment, **kw):
     global CRED_LIST
     CRED_LIST = pairs
 
-_rr_lock = gevent.lock.Semaphore()
-_rr_idx = 0
-def pick_cred():
-    """Entrega una credencial distinta por VU (round-robin, thread-safe)."""
-    global _rr_idx
+# ====== token pool (compartido) ======
+_token_pool = {}               # {"user": "TOKEN ..."}
+_token_lock = gevent.lock.Semaphore()
+
+def _ensure_slash(p): return p if p.endswith("/") else p + "/"
+def rstr(n=6): return "".join(random.choices(string.ascii_lowercase+string.digits,k=n))
+
+def get_or_login(client, user, pwd):
+    """Devuelve un token para 'user' reusando el pool; si no hay, loguea y lo guarda."""
+    with _token_lock:
+        tok = _token_pool.get(user)
+        if tok:
+            return tok
+    # no hay token: login una sola vez
+    payload = {"nombre_usuario": user, "password": pwd}
+    with client.post(_ensure_slash(LOGIN_PATH), json=payload, name="AUTH login", catch_response=True) as resp:
+        if resp.status_code != 200:
+            resp.failure(f"{resp.status_code} {resp.text}"); return None
+        data = resp.json() if resp.headers.get("content-type","").startswith("application/json") else {}
+        token = data.get("access_token") or data.get("access") or data.get("token") or data.get("key")
+        if not token:
+            resp.failure(f"Login sin token. JSON={data}"); return None
+        tok = f"{TOKEN_PREFIX} {token}"
+        resp.success()
+    with _token_lock:
+        _token_pool[user] = tok
+    return tok
+
+def pick_cred(idx):
     if not CRED_LIST:
         return (os.getenv("API_USER",""), os.getenv("API_PASS",""))
-    with _rr_lock:
-        u, p = CRED_LIST[_rr_idx % len(CRED_LIST)]
-        _rr_idx += 1
-        return u, p
-
-def rstr(n=6):
-    return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
+    return CRED_LIST[idx % len(CRED_LIST)]
 
 class WebUser(HttpUser):
+    host = HOST
     wait_time = between(0.2, 0.8)
 
     def on_start(self):
-        self.client.headers.update({"Accept": "application/json"})
+        self.client.headers.update({"Accept": "application/json","Content-Type":"application/json"})
         self.auth_ok = False
+        # asigna cred por índice de VU (id(self) no es consecutivo; usa environment.runner.user_count_index si la tienes,
+        # aquí usamos un contador global simple)
+        if not hasattr(WebUser, "_vu_counter"):
+            WebUser._vu_counter = 0
+            WebUser._vu_lock = gevent.lock.Semaphore()
+        with WebUser._vu_lock:
+            self.vu_idx = WebUser._vu_counter
+            WebUser._vu_counter += 1
 
-        user, pwd = pick_cred()
-        # Log simple en consola para verificar reparto
-        print(f"[VU {id(self)}] usando credenciales de: {user}")
+        self.user, self.pwd = pick_cred(self.vu_idx)
 
-        with self.client.post(
-            LOGIN_PATH,
-            json={"nombre_usuario": user, "password": pwd},
-            name="AUTH login",
-            catch_response=True
-        ) as resp:
-            if resp.status_code != 200:
-                resp.failure(f"{resp.status_code} {resp.text}"); return
-            data = resp.json()
-            token = data.get("access_token")
-            if not token:
-                resp.failure(f"sin access_token: {data}"); return
-            self.client.headers["Authorization"] = f"Bearer {token}"
-            resp.success(); self.auth_ok = True
+        # toma token del pool o hace login una vez
+        tok = get_or_login(self.client, self.user, self.pwd)
+        if not tok: return
+        self.client.headers["Authorization"] = tok
 
-    # -------- Helpers CRUD --------
-    def _crear_formulario(self):
+        # ✅ habilita las tareas
+        self.auth_ok = True
+
+
+
+    # reintenta una vez ante 401 → relogin + actualiza token pool
+    def _request(self, method, url, **kw):
+        r = self.client.request(method, url, **kw)
+        if r.status_code == 401:
+            tok = get_or_login(self.client, self.user, self.pwd)
+            if tok:
+                self.client.headers["Authorization"] = tok
+                r = self.client.request(method, url, **kw)
+        return r
+
+    # ===== helpers CRUD =====
+    def _crear_categoria(self):
+        b = {"nombre": f"cat_{rstr()}", "descripcion": "locust categoria"}
+        r = self._request("POST", _ensure_slash(CATEGORY_BASE), json=b, name="POST /categorias/")
+        if r.status_code in (200,201):
+            d=r.json(); return d.get("id") or d.get("id_categoria") or d.get("uuid")
+        return None
+
+    def _crear_formulario(self, cid=None):
         hoy = date.today()
-        body = {
-            "nombre": f"Form {rstr()}",
-            "descripcion": "locust",
-            "permitir_fotos": True,
-            "permitir_gps": True,
-            "disponible_desde_fecha": hoy.isoformat(),
-            "disponible_hasta_fecha": (hoy + timedelta(days=30)).isoformat(),
-            "estado": "Activo",
-            "forma_envio": "En Linea",
-            "es_publico": False,
-            "auto_envio": False,
-        }
-        r = self.client.post(FORM_BASE, json=body, name="POST /formularios/")
-        return r.json().get("id") if r.status_code in (200, 201) else None
+        b = {"nombre": f"Form {rstr()}", "descripcion":"locust","permitir_fotos":True,"permitir_gps":True,
+             "disponible_desde_fecha": hoy.isoformat(),
+             "disponible_hasta_fecha": (hoy+timedelta(days=30)).isoformat(),
+             "estado":"Activo","forma_envio":"En Linea","es_publico":False,"auto_envio":False}
+        if cid: b["id_categoria"]=cid
+        r = self._request("POST", _ensure_slash(FORM_BASE), json=b, name="POST /formularios/")
+        if r.status_code in (200,201):
+            d=r.json(); return d.get("id") or d.get("id_formulario") or d.get("uuid")
+        return None
 
-    def _agregar_pagina(self, form_id):
-        # ¡Slash final obligatorio en acciones detalle!
-        url = f"{FORM_BASE}{form_id}/agregar-pagina/"
-        body = {"nombre": f"Pag {rstr()}", "descripcion": "locust page"}
-        return self.client.post(url, json=body, name="POST /formularios/{id}/agregar-pagina/")
+    def _agregar_pagina(self, fid):
+        return self._request("POST", f"{_ensure_slash(FORM_BASE)}{fid}/agregar-pagina/",
+                             json={"nombre": f"Pag {rstr()}","descripcion":"locust page"},
+                             name="POST /formularios/{id}/agregar-pagina/")
 
-    def _agregar_campo_a_pagina(self, page_id):
-        url = f"{PAGE_BASE}{page_id}/{PAGE_ADD_FIELD_ACTION}/"
-        body = {
-            "nombre_campo": f"campo_{rstr()}",
-            "etiqueta": "Etiqueta prueba",
-            "clase": "number",
-            "ayuda": "Ayuda...",
-            "requerido": True,
-            "config": {"min": 31, "max": 87, "step": None, "unit": "$"}
-        }
-        return self.client.post(url, json=body, name="POST /paginas/{id}/campos/")
+    def _agregar_campo_a_pagina(self, pid):
+        body = {"nombre_campo": f"campo_{rstr()}","etiqueta":"Etiqueta prueba","clase":"number",
+                "ayuda":"Ayuda...","requerido":True,"config":{"min":31,"max":87,"step":None,"unit":"$"}}
+        return self._request("POST", f"{_ensure_slash(PAGE_BASE)}{pid}/{PAGE_ADD_FIELD_ACTION}/",
+                             json=body, name="POST /paginas/{id}/campos/")
 
-    # -------- Escenario principal (crear/editar/borrar) --------
+    # ===== escenarios =====
     @task(3)
     def flujo_escritura(self):
         if not self.auth_ok: return
-
-        form_id = self._crear_formulario()
-        if not form_id: return
-        self.client.get(f"{FORM_BASE}{form_id}/", name="GET /formularios/{id}/")
-
-        rp = self._agregar_pagina(form_id)
-        page_id = rp.json().get("id_pagina") if rp.status_code in (200,201) else None
-
+        cid = self._crear_categoria()
+        fid = self._crear_formulario(cid)
+        if not fid: return
+        self._request("GET", f"{_ensure_slash(FORM_BASE)}{fid}/", name="GET /formularios/{id}/")
+        rp = self._agregar_pagina(fid)
+        pid = rp.json().get("id_pagina") if rp.status_code in (200,201) else None
         field_id = None
-        if page_id:
-            rc = self._agregar_campo_a_pagina(page_id)
-            if rc.status_code in (200, 201):
+        if pid:
+            rc = self._agregar_campo_a_pagina(pid)
+            if rc.status_code in (200,201):
                 field_id = rc.json().get("id_campo")
-
-        self.client.patch(f"{FORM_BASE}{form_id}/", json={"descripcion": "edit locust"},
-                          name="PATCH /formularios/{id}/")
-        if page_id:
-            self.client.patch(f"{PAGE_BASE}{page_id}/", json={"descripcion": "edit page locust"},
-                              name="PATCH /paginas/{id}/")
+        self._request("PATCH", f"{_ensure_slash(FORM_BASE)}{fid}/",
+                      json={"descripcion":"edit locust"}, name="PATCH /formularios/{id}/")
+        if pid:
+            self._request("PATCH", f"{_ensure_slash(PAGE_BASE)}{pid}/",
+                          json={"descripcion":"edit page locust"}, name="PATCH /paginas/{id}/")
         if field_id:
-            self.client.patch(f"/api/campos/{field_id}/", json={"etiqueta": "Etiqueta edit"},
-                              name="PATCH /campos/{id}/")
+            self._request("PATCH", f"{_ensure_slash(FIELD_BASE)}{field_id}/",
+                          json={"etiqueta":"Etiqueta edit"}, name="PATCH /campos/{id}/")
+            self._request("DELETE", f"{_ensure_slash(FIELD_BASE)}{field_id}/", name="DELETE /campos/{id}/")
+        if pid:
+            self._request("DELETE", f"{_ensure_slash(PAGE_BASE)}{pid}/", name="DELETE /paginas/{id}/")
+        self._request("DELETE", f"{_ensure_slash(FORM_BASE)}{fid}/", name="DELETE /formularios/{id}/")
 
-        if field_id:
-            self.client.delete(f"/api/campos/{field_id}/", name="DELETE /campos/{id}/")
-        if page_id:
-            self.client.delete(f"{PAGE_BASE}{page_id}/", name="DELETE /paginas/{id}/")
-        self.client.delete(f"{FORM_BASE}{form_id}/", name="DELETE /formularios/{id}/")
-
-    # -------- Lecturas --------
     @task(1)
     def solo_listas(self):
         if not self.auth_ok: return
-        self.client.get(FORM_BASE, name="GET /formularios/")
-        self.client.get(PAGE_BASE,  name="GET /paginas/")
+        self._request("GET", _ensure_slash(CATEGORY_BASE), name="GET /categorias/")
+        self._request("GET", _ensure_slash(FORM_BASE), name="GET /formularios/")
+        self._request("GET", _ensure_slash(PAGE_BASE), name="GET /paginas/")
