@@ -2,14 +2,22 @@ import os
 import json
 from locust import task, between, HttpUser, tag
 
+PAGE_ID = os.getenv("API_PAGE_ID", "cf4c683f-f51b-4262-9fd2-b5fb3b79b87a")         # UUID de Página
+USER_USERNAME = os.getenv("API_USER_USERNAME", "lindain1")
+FORM_ID = os.getenv("API_FORM_ID", "e0d8e313-a5ec-4215-b2f3-d77c71dd328d")   # UUID de Formulario
+
 PROTECTED = [
     ("GET",  "/api/formularios/"),
     ("POST", "/api/formularios/"),                 # crear
     ("GET",  "/api/paginas/"),
-    ("POST", "/api/formularios/bfa564b7-9798-44a8-8a2f-25a8bce5ec4a/agregar-pagina/"),# usa un ID válido/placeholder
-    ("PATCH","/api/formularios/bfa564b7-9798-44a8-8a2f-25a8bce5ec4a/"),
-    ("DELETE","/api/formularios/bfa564b7-9798-44a8-8a2f-25a8bce5ec4a/"),
-    # agrega aquí otros que quieras validar (campos, datasets, etc.)
+    ("POST", f"/api/formularios/{FORM_ID}/agregar-pagina/"),# usa un ID válido/placeholder
+    ("PATCH", f"/api/formularios/{FORM_ID}/"),
+    ("POST", f"/api/formularios/{FORM_ID}/agregar-pagina/"),
+    ("POST", f"/api/paginas/{PAGE_ID}/campos/"),
+    ("DELETE", f"/api/formularios/{FORM_ID}/"),
+    ("POST", "/api/usuarios/"),
+    ("PATCH", f"/api/usuarios/{USER_USERNAME}/"),
+
 ]
 
 LOGIN_PATH = "/api/auth/login/"
@@ -89,6 +97,8 @@ class SecurityAuthUser(HttpUser):
 class SecurityUser(HttpUser):
     wait_time = between(0.2, 0.6)
 
+    @tag("security")
+    @task
     def _assert_unauthorized(self, method, path, name):
         with self.client.request(
             method, path, name=name, catch_response=True
