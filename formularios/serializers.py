@@ -401,9 +401,53 @@ class PaginaUpdateSerializer(serializers.ModelSerializer):
         model = Pagina
         fields = ("nombre", "descripcion", "secuencia")
         extra_kwargs = {k: {"required": False} for k in fields}
+    
+    def update(self, instance, validated_data):
+        """
+        Actualiza la página y crea una nueva versión para mantener el historial.
+        """
+        from .services import crear_nueva_version_pagina
+        from django.db import transaction
+        
+        with transaction.atomic():
+            # 1. Actualizar los datos de la página
+            for field, value in validated_data.items():
+                setattr(instance, field, value)
+            instance.save()
+            
+            # 2. Crear nueva versión de la página
+            request = self.context.get('request')
+            usuario = getattr(request, 'user', None) if request else None
+            crear_nueva_version_pagina(
+                pagina=instance,
+                usuario=usuario,
+                razon="Actualización de información de página"
+            )
+        
+        return instance
 
 
 class CampoUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer para actualizar campos existentes.
+    
+    Cuando se actualiza un campo, automáticamente se versionan TODAS las páginas
+    que contienen ese campo. Esto asegura que:
+    - Los cambios en campos se reflejen en todas las páginas afectadas
+    - Se mantenga un historial completo de modificaciones
+    - Se pueda revertir a versiones anteriores si es necesario
+    
+    Campos actualizables:
+    - etiqueta: Texto visible del campo
+    - ayuda: Texto de ayuda para el usuario
+    - requerido: Si el campo es obligatorio
+    - config: Configuración JSON del campo
+    
+    Config soporta dos modos de actualización:
+    - Merge (default): Combina el config existente con el nuevo
+    - Replace (?replace_config=true): Reemplaza completamente el config
+    """
+    
     config = serializers.JSONField(required=False)
 
     class Meta:
@@ -412,6 +456,23 @@ class CampoUpdateSerializer(serializers.ModelSerializer):
         extra_kwargs = {k: {"required": False} for k in fields}
 
     def _deep_merge(self, base: dict, patch: dict) -> dict:
+        """
+        Combina dos diccionarios de forma recursiva.
+        Los valores en 'patch' sobrescriben los de 'base'.
+        
+        Args:
+            base: Diccionario base
+            patch: Diccionario con cambios a aplicar
+            
+        Returns:
+            Diccionario combinado
+            
+        Example:
+            >>> base = {"a": 1, "b": {"c": 2, "d": 3}}
+            >>> patch = {"b": {"c": 999}, "e": 5}
+            >>> result = _deep_merge(base, patch)
+            >>> # result = {"a": 1, "b": {"c": 999, "d": 3}, "e": 5}
+        """
         for k, v in patch.items():
             if isinstance(v, dict) and isinstance(base.get(k), dict):
                 base[k] = self._deep_merge(base[k], v)
@@ -420,40 +481,91 @@ class CampoUpdateSerializer(serializers.ModelSerializer):
         return base
 
     def update(self, instance, validated):
-        cfg_patch = validated.pop("config", None)
+        """
+        Actualiza el campo y versiona todas las páginas que lo contienen.
+        
+        Proceso:
+        1. Actualiza los campos simples (etiqueta, ayuda, requerido)
+        2. Procesa el config (merge o replace según query param)
+        3. Guarda los cambios en el campo
+        4. Identifica todas las páginas que contienen este campo
+        5. Crea una nueva versión para cada página afectada
+        
+        Args:
+            instance: La instancia de Campo a actualizar
+            validated: Datos validados del request
+            
+        Returns:
+            La instancia de Campo actualizada
+            
+        Query Parameters:
+            ?replace_config=true : Reemplaza completamente el config
+            ?replace_config=false : Hace merge del config (default)
+        """
+        from .services import versionar_paginas_por_campo
+        from django.db import transaction
+        
+        with transaction.atomic():
+            # ===== 1. ACTUALIZAR CONFIG (si viene en el request) =====
+            cfg_patch = validated.pop("config", None)
+            
+            # Actualizar campos simples
+            for k, v in validated.items():
+                setattr(instance, k, v)
 
-        for k, v in validated.items():
-            setattr(instance, k, v)
+            if cfg_patch is not None:
+                request = self.context.get("request")
+                replace_all = False
+                
+                # Determinar si se reemplaza o se hace merge del config
+                if request:
+                    q = request.query_params
+                    replace_all = (q.get("replace_config") or "").lower() in ("1", "true", "yes")
 
-        if cfg_patch is not None:
-            request = self.context.get("request")
-            replace_all = False
-            if request:
-                q = request.query_params
-                replace_all = (q.get("replace_config") or "").lower() in ("1", "true", "yes")
+                # Parsear config actual
+                try:
+                    current = json.loads(instance.config) if instance.config else {}
+                except Exception:
+                    current = {}
 
-            try:
-                current = json.loads(instance.config) if instance.config else {}
-            except Exception:
-                current = {}
+                # Aplicar cambios según el modo
+                if replace_all:
+                    # Modo REPLACE: reemplazar todo el config
+                    merged = cfg_patch or {}
+                else:
+                    # Modo MERGE: combinar configs (default)
+                    if not isinstance(cfg_patch, dict):
+                        raise serializers.ValidationError({
+                            "config": "Debe ser un objeto JSON"
+                        })
+                    merged = self._deep_merge(
+                        current if isinstance(current, dict) else {}, 
+                        cfg_patch
+                    )
 
-            if replace_all:
-                merged = cfg_patch or {}
-            else:
-                if not isinstance(cfg_patch, dict):
-                    raise serializers.ValidationError({"config": "Debe ser un objeto JSON"})
-                merged = self._deep_merge(current if isinstance(current, dict) else {}, cfg_patch)
+                instance.config = json.dumps(merged, ensure_ascii=False)
 
-            instance.config = json.dumps(merged, ensure_ascii=False)
-
-        instance.save()
+            # ===== 2. GUARDAR CAMBIOS EN EL CAMPO =====
+            instance.save()
+            
+            # ===== 3. VERSIONAR TODAS LAS PÁGINAS AFECTADAS =====
+            # Esto es CRÍTICO: cada página que contiene este campo debe
+            # crear una nueva versión para reflejar el cambio
+            request = self.context.get('request')
+            usuario = getattr(request, 'user', None) if request else None
+            
+            # La función versionar_paginas_por_campo se encarga de:
+            # - Encontrar todas las páginas que tienen este campo
+            # - Crear una nueva PaginaVersion para cada una
+            # - Copiar todos los campos de la versión anterior
+            versiones_creadas = versionar_paginas_por_campo(instance, usuario)
+            
+            # Log opcional (puedes comentar esto en producción)
+            if versiones_creadas:
+                print(f"✓ Campo '{instance.nombre_campo}' actualizado")
+                print(f"✓ Se versionaron {len(versiones_creadas)} página(s) afectada(s)")
+        
         return instance
-
-class PaginaUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Pagina
-        fields = ("nombre", "descripcion", "secuencia") 
-        extra_kwargs = {k: {"required": False} for k in ("nombre","descripcion","secuencia")}
 
 class FormularioUpdateSerializer(serializers.ModelSerializer):
     class Meta:

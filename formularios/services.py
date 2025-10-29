@@ -105,9 +105,9 @@ _CLASE_A_TIPO = {
     "string":  "texto",
     "text":    "texto",
     "list":    "texto",
-    "hour":    "texto",
+    "hour":    "hour",
     "group":   "texto",
-    "date":    "texto",
+    "date":    "date",
     "number":  "numerico",
     "calc":    "numerico",
     "boolean": "booleano",
@@ -126,6 +126,12 @@ def _ultima_pagina_version(pagina: Pagina) -> PaginaVersion | None:
 
 @transaction.atomic
 def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Crea un nuevo campo en una página y genera una nueva versión.
+    
+    CAMBIO CLAVE: Ahora MUEVE los campos existentes de la versión anterior
+    a la nueva versión, en lugar de copiarlos.
+    """
     clase = (data.get("clase") or "").strip().lower()
     if not clase:
         raise ValidationError("El campo 'clase' es obligatorio.")
@@ -140,7 +146,7 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
         except Exception:
             raise ValidationError("El campo 'config' debe ser JSON válido.")
 
-    # 1) Crear Campo
+    # 1) Crear el nuevo Campo
     campo = Campo.objects.create(
         tipo=tipo,
         clase=clase,
@@ -151,22 +157,20 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
         requerido=bool(data.get("requerido", False)),
     )
 
-    # 2) Resolver versión/formulario actual de ESA página
+    # 2) Resolver versión/formulario actual de la página
     piv_actual = (Pagina_Index_Version.objects
                   .filter(id_pagina=pagina)
                   .select_related("id_index_version")
                   .order_by("-id_index_version__fecha_creacion")
                   .first())
     if not piv_actual:
-        # si no hay, creamos una versión inicial del formulario de la página:
-        # asumimos que existe un vínculo en Formulario_Index_Version para cualquier versión nueva
-        fiv_nueva = FormularioIndexVersion.objects.create()  # sin FK directo
+        fiv_nueva = FormularioIndexVersion.objects.create()
         Pagina_Index_Version.objects.create(id_pagina=pagina, id_index_version=fiv_nueva)
         piv_actual = Pagina_Index_Version.objects.get(id_pagina=pagina, id_index_version=fiv_nueva)
 
     fiv_actual = piv_actual.id_index_version
 
-    # 3) Encontrar el formulario al que pertenece esa versión (vía historial)
+    # 3) Encontrar el formulario al que pertenece esa versión
     f_link = Formulario_Index_Version.objects.filter(id_index_version=fiv_actual).first()
     if not f_link:
         raise ValidationError("No se pudo resolver el formulario para la versión actual de la página.")
@@ -174,27 +178,36 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
 
     # 4) Crear NUEVA FormularioIndexVersion (publicación v+1)
     fiv_nueva = FormularioIndexVersion.objects.create()
-    # registrar en historial
     Formulario_Index_Version.objects.get_or_create(
         id_index_version=fiv_nueva,
         defaults={"id_formulario": formulario},
     )
 
-    # 5) Nueva PaginaVersion
+    # 5) Obtener la última versión de la página para calcular sequence
     prev_pv = _ultima_pagina_version(pagina)
+    
+    # 6) Crear la NUEVA PaginaVersion
     nueva_pv = PaginaVersion.objects.create(
         id_pagina_version=uuid.uuid4().hex,
         fecha_creacion=timezone.now(),
         id_pagina=pagina,
     )
 
-    # 6) Calcular sequence
-    max_seq = 0
+    # 7) MOVER (no copiar) los campos de la versión anterior a la nueva
+    # Esto es CRÍTICO: como id_campo es PK, debemos mover en lugar de copiar
     if prev_pv:
-        max_seq = (PaginaCampo.objects
-                   .filter(id_pagina_version=prev_pv)
-                   .aggregate(max_seq=models.Max('sequence'))
-                   .get('max_seq') or 0)
+        PaginaCampo.objects.filter(
+            id_pagina_version=prev_pv
+        ).update(
+            id_pagina_version=nueva_pv
+        )
+
+    # 8) Calcular sequence para el nuevo campo
+    max_seq = (PaginaCampo.objects
+               .filter(id_pagina_version=nueva_pv)
+               .aggregate(max_seq=models.Max('sequence'))
+               .get('max_seq') or 0)
+    
     sequence = data.get("sequence")
     try:
         sequence = int(sequence) if sequence is not None else None
@@ -203,15 +216,14 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
     if sequence is None:
         sequence = (max_seq + 1) if max_seq else 1
 
-    # 7) Link campo a nueva versión de la página
+    # 9) Asociar el NUEVO campo a la nueva versión de la página
     PaginaCampo.objects.create(
         id_campo=campo,
         id_pagina_version=nueva_pv,
         sequence=sequence,
     )
 
-    # 8) Actualizar punteros PIV de TODAS las páginas de ese formulario a la NUEVA versión
-    #    → todas las páginas que estaban apuntando a fiv_actual deben apuntar a fiv_nueva
+    # 10) Actualizar punteros de TODAS las páginas del formulario a la nueva versión
     paginas_del_form = (Pagina_Index_Version.objects
                         .filter(id_index_version=fiv_actual)
                         .values_list("id_pagina", flat=True))
@@ -229,6 +241,102 @@ def crear_campo_y_versionar_pagina(pagina: Pagina, data: Dict[str, Any]) -> Dict
         "pagina_version_id": str(nueva_pv.id_pagina_version),
         "sequence": sequence,
     }
+
+
+@transaction.atomic
+def versionar_paginas_por_campo(campo: Campo, usuario=None) -> List[PaginaVersion]:
+    """
+    Crea una nueva versión para TODAS las páginas que contienen un campo específico.
+    
+    Se usa cuando se actualiza un campo existente (etiqueta, ayuda, config, etc.)
+    para reflejar el cambio en todas las páginas que usan ese campo.
+    
+    IMPORTANTE: Como id_campo es PRIMARY KEY en PaginaCampo, debemos MOVER
+    los campos entre versiones en lugar de copiarlos.
+    
+    Args:
+        campo: El campo que fue modificado
+        usuario: Usuario que realizó la modificación (opcional)
+    
+    Returns:
+        Lista de PaginaVersion creadas
+    """
+    versiones_creadas = []
+    
+    # 1) Encontrar todas las versiones de página que contienen este campo
+    versiones_con_campo = (PaginaCampo.objects
+                          .filter(id_campo=campo)
+                          .select_related('id_pagina_version__id_pagina')
+                          .values_list('id_pagina_version__id_pagina', flat=True)
+                          .distinct())
+    
+    # 2) Para cada página que contiene este campo, crear una nueva versión
+    for pagina_id in versiones_con_campo:
+        try:
+            pagina = Pagina.objects.get(id_pagina=pagina_id)
+            
+            # Obtener la versión actual de la página
+            version_actual = (PaginaVersion.objects
+                            .filter(id_pagina=pagina)
+                            .order_by('-fecha_creacion')
+                            .first())
+            
+            if not version_actual:
+                continue
+            
+            # Crear nueva versión de la página
+            nueva_version = PaginaVersion.objects.create(
+                id_pagina_version=uuid.uuid4().hex,
+                id_pagina=pagina,
+                fecha_creacion=timezone.now(),
+            )
+            
+            # MOVER todos los campos de la versión actual a la nueva versión
+            # Esto incluye el campo modificado y todos los demás campos
+            PaginaCampo.objects.filter(
+                id_pagina_version=version_actual
+            ).update(
+                id_pagina_version=nueva_version
+            )
+            
+            # Actualizar el puntero de versión del formulario
+            piv_actual = (Pagina_Index_Version.objects
+                         .filter(id_pagina=pagina)
+                         .select_related("id_index_version")
+                         .first())
+            
+            if piv_actual:
+                fiv_actual = piv_actual.id_index_version
+                f_link = Formulario_Index_Version.objects.filter(
+                    id_index_version=fiv_actual
+                ).first()
+                
+                if f_link:
+                    formulario = f_link.id_formulario
+                    fiv_nueva = FormularioIndexVersion.objects.create()
+                    
+                    Formulario_Index_Version.objects.get_or_create(
+                        id_index_version=fiv_nueva,
+                        defaults={"id_formulario": formulario},
+                    )
+                    
+                    # Actualizar punteros de TODAS las páginas del formulario
+                    paginas_del_form = (Pagina_Index_Version.objects
+                                      .filter(id_index_version=fiv_actual)
+                                      .values_list("id_pagina", flat=True))
+                    
+                    for pid in paginas_del_form:
+                        Pagina_Index_Version.objects.update_or_create(
+                            id_pagina_id=pid,
+                            defaults={"id_index_version": fiv_nueva},
+                        )
+            
+            versiones_creadas.append(nueva_version)
+            
+        except Pagina.DoesNotExist:
+            continue
+    
+    return versiones_creadas
     
 TIPO_POR_CLASE = {
     "number": "number",
@@ -247,22 +355,112 @@ TIPO_POR_CLASE = {
 def _uuid32() -> str:
     return uuid.uuid4().hex
 
-def _pagina_version_actual_o_nueva(id_pagina: str) -> PaginaVersion:
-    # acepta UUID/str de Página; obtiene objeto y usa FK real
+def _pagina_version_actual_o_nueva(id_pagina: str, crear_nueva: bool = False) -> PaginaVersion:
+    """
+    Obtiene la PaginaVersion más reciente de una página, o crea una nueva si no existe.
+    
+    Args:
+        id_pagina: UUID de la página
+        crear_nueva: Si True, SIEMPRE crea una nueva versión y mueve los campos
+    
+    Returns:
+        PaginaVersion (nueva o existente según crear_nueva)
+    """
     from .models import Pagina as PaginaModel
     pagina_obj = PaginaModel.objects.get(pk=id_pagina)
-    pv = (PaginaVersion.objects
-          .filter(id_pagina=pagina_obj)
-          .order_by("-fecha_creacion")
-          .first())
-    if pv:
+    
+    # Buscar la versión actual
+    pv_actual = (PaginaVersion.objects
+                 .filter(id_pagina=pagina_obj)
+                 .order_by("-fecha_creacion")
+                 .first())
+    
+    # Si no existe ninguna versión, crear la primera
+    if not pv_actual:
+        pv = PaginaVersion.objects.create(
+            id_pagina_version=uuid.uuid4().hex,
+            fecha_creacion=timezone.now(),
+            id_pagina=pagina_obj,
+        )
         return pv
-    pv = PaginaVersion.objects.create(
-        id_pagina_version=uuid.uuid4().hex,   # tu PK char(32)
+    
+    # Si no se solicita crear nueva, devolver la actual
+    if not crear_nueva:
+        return pv_actual
+    
+    # CREAR NUEVA VERSIÓN y mover campos
+    pv_nueva = PaginaVersion.objects.create(
+        id_pagina_version=uuid.uuid4().hex,
         fecha_creacion=timezone.now(),
         id_pagina=pagina_obj,
     )
-    return pv
+    
+    # MOVER todos los campos de la versión actual a la nueva
+    PaginaCampo.objects.filter(
+        id_pagina_version=pv_actual
+    ).update(
+        id_pagina_version=pv_nueva
+    )
+    
+    # Actualizar punteros del formulario
+    _actualizar_punteros_formulario(pagina_obj, pv_nueva)
+    
+    return pv_nueva
+
+
+# ============================================================================
+# AGREGAR esta nueva función auxiliar (después de _pagina_version_actual_o_nueva)
+# ============================================================================
+
+@transaction.atomic
+def _actualizar_punteros_formulario(pagina: "Pagina", nueva_version: PaginaVersion):
+    """
+    Actualiza los punteros del formulario después de crear una nueva versión de página.
+    
+    Args:
+        pagina: Objeto Pagina
+        nueva_version: La nueva PaginaVersion creada
+    """
+    # Obtener el puntero actual de la página
+    piv_actual = (Pagina_Index_Version.objects
+                 .filter(id_pagina=pagina)
+                 .select_related("id_index_version")
+                 .first())
+    
+    if not piv_actual:
+        return
+    
+    fiv_actual = piv_actual.id_index_version
+    
+    # Encontrar el formulario
+    f_link = Formulario_Index_Version.objects.filter(
+        id_index_version=fiv_actual
+    ).first()
+    
+    if not f_link:
+        return
+    
+    formulario = f_link.id_formulario
+    
+    # Crear nueva versión del formulario
+    fiv_nueva = FormularioIndexVersion.objects.create()
+    
+    Formulario_Index_Version.objects.get_or_create(
+        id_index_version=fiv_nueva,
+        defaults={"id_formulario": formulario},
+    )
+    
+    # Actualizar punteros de TODAS las páginas del formulario
+    paginas_del_form = (Pagina_Index_Version.objects
+                       .filter(id_index_version=fiv_actual)
+                       .values_list("id_pagina", flat=True))
+    
+    for pid in paginas_del_form:
+        Pagina_Index_Version.objects.update_or_create(
+            id_pagina_id=pid,
+            defaults={"id_index_version": fiv_nueva},
+        )
+
 
 def _siguiente_sequence(id_pagina_version: str) -> int:
     from django.db.models import Max
@@ -365,7 +563,7 @@ def crear_campo_en_pagina(id_pagina: str, payload: dict) -> dict:
         campo.save(update_fields=["config"])
 
     # -------- 5) Obtener/crear la PaginaVersion destino y calcular sequence ----------
-    pv = _pagina_version_actual_o_nueva(id_pagina)
+    pv = _pagina_version_actual_o_nueva(id_pagina, crear_nueva=True)
 
     seq = payload.get("sequence", None)
     try:
@@ -702,3 +900,75 @@ def fetch_items_from_fdv_by_campo(
     # normaliza a pares {key,label}
     out = [{"key": r["key_text"], "label": r["label_text"]} for r in qs]
     return out
+
+@transaction.atomic
+def crear_nueva_version_pagina(pagina: Pagina, usuario=None, razon: str = None) -> PaginaVersion:
+    """
+    Crea una nueva versión de una página MOVIENDO los campos de la versión anterior.
+    
+    IMPORTANTE: Como id_campo es PRIMARY KEY en PaginaCampo, un campo solo puede 
+    estar asociado a UNA versión de página a la vez. Por lo tanto, MOVEMOS los 
+    campos de la versión anterior a la nueva versión en lugar de copiarlos.
+    
+    Esto significa que:
+    - La versión anterior quedará SIN campos (vacía)
+    - La nueva versión tendrá TODOS los campos que tenía la anterior
+    - Se mantiene el constraint de PRIMARY KEY de id_campo
+    - El historial se mantiene porque PaginaVersion sigue existiendo
+    """
+    # 1) Obtener la última versión de la página
+    ultima_version = (PaginaVersion.objects
+                     .filter(id_pagina=pagina)
+                     .order_by("-fecha_creacion")
+                     .first())
+    
+    # 2) Crear la nueva versión
+    nueva_version = PaginaVersion.objects.create(
+        id_pagina_version=uuid.uuid4().hex,
+        id_pagina=pagina,
+        fecha_creacion=timezone.now(),
+    )
+    
+    # 3) MOVER (no copiar) los campos de la versión anterior a la nueva
+    # Como id_campo es PRIMARY KEY, un campo solo puede estar en UNA versión
+    if ultima_version:
+        # Actualizar todos los PaginaCampo para que apunten a la nueva versión
+        # Esto automáticamente los "mueve" de la versión anterior a la nueva
+        PaginaCampo.objects.filter(
+            id_pagina_version=ultima_version
+        ).update(
+            id_pagina_version=nueva_version
+        )
+    
+    # 4) Actualizar el puntero de versión del formulario
+    piv_actual = (Pagina_Index_Version.objects
+                 .filter(id_pagina=pagina)
+                 .select_related("id_index_version")
+                 .first())
+    
+    if piv_actual:
+        fiv_actual = piv_actual.id_index_version
+        f_link = Formulario_Index_Version.objects.filter(
+            id_index_version=fiv_actual
+        ).first()
+        
+        if f_link:
+            formulario = f_link.id_formulario
+            fiv_nueva = FormularioIndexVersion.objects.create()
+            
+            Formulario_Index_Version.objects.get_or_create(
+                id_index_version=fiv_nueva,
+                defaults={"id_formulario": formulario},
+            )
+            
+            paginas_del_form = (Pagina_Index_Version.objects
+                              .filter(id_index_version=fiv_actual)
+                              .values_list("id_pagina", flat=True))
+            
+            for pid in paginas_del_form:
+                Pagina_Index_Version.objects.update_or_create(
+                    id_pagina_id=pid,
+                    defaults={"id_index_version": fiv_nueva},
+                )
+    
+    return nueva_version
