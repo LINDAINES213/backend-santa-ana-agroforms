@@ -239,24 +239,25 @@ def test_flatten_entry_row_missing_field():
 @pytest.mark.django_db
 def test_dataframe_por_form_empty():
     # Test con formulario sin respuestas
-    df = dataframe_por_form(str(uuid_lib.uuid4()))
+    df_principal, df_grupos = dataframe_por_form(str(uuid_lib.uuid4()))
     
-    assert df.empty
+    assert df_principal.empty
+    assert df_grupos.empty
 
 
 @pytest.mark.django_db
 def test_dataframe_por_form_with_entries(formulario_entries_multiple):
     # Test con múltiples respuestas
     form_id = formulario_entries_multiple[0].form_id
-    df = dataframe_por_form(form_id)
+    df_principal, df_grupos = dataframe_por_form(form_id)
     
-    assert not df.empty
-    assert len(df) == len(formulario_entries_multiple)
+    assert not df_principal.empty
+    assert len(df_principal) == len(formulario_entries_multiple)
     
     # Verificar columnas esperadas
-    assert "Nombre Formulario" in df.columns
-    assert "Usuario" in df.columns
-    assert "Status" in df.columns
+    assert "Nombre Formulario" in df_principal.columns
+    assert "Usuario" in df_principal.columns
+    assert "Status" in df_principal.columns
 
 
 @pytest.mark.django_db
@@ -324,8 +325,11 @@ def test_content_bytes_json(formulario_entries_multiple):
     
     # Verificar que es JSON válido
     data = json.loads(content.decode("utf-8"))
-    assert isinstance(data, list)
-    assert len(data) == len(formulario_entries_multiple)
+    assert isinstance(data, dict)
+    assert "formulario" in data
+    assert "respuestas" in data
+    assert "grupos" in data
+    assert len(data["respuestas"]) == len(formulario_entries_multiple)
 
 
 @pytest.mark.django_db
