@@ -17,7 +17,7 @@ from .models import FuenteDatos
 from .serializers import FuenteDatosSerializer, FuenteDatosCreateSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 from . import services
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample, OpenApiParameter
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample, OpenApiParameter, inline_serializer
 
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import serializers, viewsets
@@ -33,17 +33,6 @@ from django.shortcuts import get_object_or_404
 )
 class FuenteDatosViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "delete", "head", "options"]
-    """
-    ViewSet para gestionar Fuentes de Datos (Excel/CSV en Azure Blob Storage)
-    
-    POST /api/fuentes-datos/           - Subir nuevo archivo
-    GET  /api/fuentes-datos/           - Listar todas las fuentes
-    GET  /api/fuentes-datos/{id}/      - Detalle de una fuente
-    PUT  /api/fuentes-datos/{id}/      - Actualizar metadatos (no archivo)
-    DELETE /api/fuentes-datos/{id}/    - Eliminar fuente y archivo
-    POST /api/fuentes-datos/{id}/preview/ - Re-generar preview
-    GET  /api/fuentes-datos/{id}/download/ - Descargar archivo original
-    """
     queryset = FuenteDatos.objects.all()
     serializer_class = FuenteDatosSerializer
     parser_classes = (MultiPartParser, FormParser)
@@ -219,19 +208,12 @@ class CategoriaViewSet(viewsets.ModelViewSet):
 @extend_schema_view(
     list=extend_schema(tags=["Páginas"]),
     retrieve=extend_schema(tags=["Páginas"]),
-    create=extend_schema(tags=["Páginas"]),
+    create=extend_schema(exclude=True),
     partial_update=extend_schema(tags=["Páginas"]),
     destroy=extend_schema(tags=["Páginas"]),
 )
 class PaginaViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
-    """
-    /api/paginas/                       -> lista páginas
-    /api/paginas/{id_pagina}/           -> detalle (agrega ?include_campos=1 para devolver campos)
-    /api/paginas/{id_pagina}/campos/    -> GET: solo los campos
-    /api/paginas/{id_pagina}/agregar-campo/ -> POST: crear campo en esa página
-
-    """
     def get_serializer_class(self):
         if self.action in ("partial_update", "update"):
             return PaginaUpdateSerializer
@@ -255,14 +237,25 @@ class PaginaViewSet(viewsets.ModelViewSet):
         data = PaginaConCamposSerializer(pagina, context=self.get_serializer_context()).data
         return Response(data.get("campos", []), status=status.HTTP_200_OK)
 
-    @extend_schema(tags=["Campos"], summary="Agregar campo a la página")
+    @extend_schema(tags=["Campos"], summary="Agregar campo a la página",
+                   request=inline_serializer(
+                        name="CampoCreate",
+                        fields={
+                            "clase": serializers.ChoiceField(choices=[
+                                "text", "number", "date", "dataset", "calc", "group"
+                            ]),
+                            "nombre_campo": serializers.CharField(),
+                            "etiqueta": serializers.CharField(),
+                            "ayuda": serializers.CharField(),
+                            "requerido": serializers.BooleanField(required=False, default=False),
+                            "grupo": serializers.UUIDField(required=False, allow_null=True),
+                            "config": serializers.JSONField(),
+                        },
+                   ),
+                   responses=CampoSerializer,
+                )
     @action(detail=True, methods=["post"], url_path="campos")
     def agregar_campo(self, request, id_pagina=None):
-        """
-        Crea un campo en la página y (opcionalmente) lo asocia a un grupo.
-        - NO escribe id_grupo en el config de los campos hijos.
-        - La relación group-child vive SOLO en la tabla pivote.
-        """
 
         ser = CrearCampoEnPaginaSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -314,9 +307,6 @@ class PaginaViewSet(viewsets.ModelViewSet):
 )
 class FormularioListViewSet(viewsets.ReadOnlyModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
-    """
-    Este ViewSet devuelve una lista con información más ligera para catálogos.
-    """
     queryset = Formulario.objects.all()
     serializer_class = FormularioListSerializer
 
@@ -353,10 +343,6 @@ class FormularioViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        """
-        DELETE /api/formularios/{id}/
-        Deletes a complete form with all its related data
-        """
         
         formulario = self.get_object()
         formulario_id = str(formulario.id)
@@ -391,10 +377,6 @@ class FormularioViewSet(viewsets.ModelViewSet):
             )
 
     def _delete_formulario_cascade(self, formulario_id: str):
-        """
-        Elimina un formulario y TODA su jerarquía usando el nuevo esquema:
-        Formulario -> (historial) Formularios_Index_Version -> Pagina_Index_Version -> Pagina/Versiones/Campos
-        """
         with transaction.atomic():
             form = Formulario.objects.get(pk=formulario_id)
 
@@ -442,7 +424,20 @@ class FormularioViewSet(viewsets.ModelViewSet):
             # 9) por último, el formulario
             form.delete()
 
-    @extend_schema(tags=["Páginas"], summary="Agregar nueva página al formulario")
+    @extend_schema(
+        tags=["Páginas"], 
+        summary="Agregar nueva página al formulario",
+        request=inline_serializer(
+            name="PaginaCreate",
+            fields={
+                "nombre": serializers.CharField(),
+                "descripcion": serializers.CharField(required=False, allow_blank=True),
+                "secuencia": serializers.IntegerField(required=False),
+            },
+        ),
+        responses=PaginaSerializer,
+        examples=[OpenApiExample("Crear página", value={"nombre":"Datos de parcela","secuencia":1})],
+    )
     @action(detail=True, methods=['post'], url_path='agregar-pagina')
     @transaction.atomic
     def agregar_pagina(self, request, *args, **kwargs):
@@ -516,7 +511,6 @@ class FormularioViewSet(viewsets.ModelViewSet):
 
     @extend_schema(tags=["Formularios"], summary="No permite abrir formularios suspendidos")
     def retrieve(self, request, *args, **kwargs):
-        """Bloquear 'abrir' si está Suspendida."""
         obj = self.get_object()
         if (obj.estado or "").lower() == "suspendida":
             return Response(
@@ -560,19 +554,12 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 @extend_schema_view(
     list=extend_schema(tags=["Campos"]),
     retrieve=extend_schema(tags=["Campos"]),
-    create=extend_schema(tags=["Campos"]),
+    create=extend_schema(exclude=True),
     partial_update=extend_schema(tags=["Campos"]),
     destroy=extend_schema(tags=["Campos"]),
 )
 class CampoViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
-    """
-    GET /api/campos/          -> todos los campos (paginado)
-    GET /api/campos/{id}/     -> detalle de un campo
-    Filtros:
-      ?search=texto           (busca en nombre_campo, etiqueta, clase, tipo)
-      ?ordering=nombre_campo  (o -nombre_campo, tipo, clase, etiqueta)
-    """
     queryset = Campo.objects.all().order_by("nombre_campo")
     lookup_field = "id_campo"
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -647,10 +634,6 @@ class GrupoViewSet(viewsets.ReadOnlyModelViewSet):
     )
     @action(detail=False, methods=["get"], url_path="campo/(?P<id_campo_group>[^/.]+)")
     def by_campo_group(self, request, id_campo_group=None):
-        """
-        Obtener grupo por id_campo_group
-        GET /api/grupos/campo/{id_campo_group}/
-        """
         try:
             grupo = Grupo.objects.get(id_campo_group=id_campo_group)
             serializer = self.get_serializer(grupo)
@@ -669,19 +652,12 @@ class GrupoViewSet(viewsets.ReadOnlyModelViewSet):
 @extend_schema_view(
     list=extend_schema(tags=["Asignaciones"]),
     retrieve=extend_schema(tags=["Asignaciones"]),
-    create=extend_schema(tags=["Asignaciones"]),
+    create=extend_schema(exclude=True),
     partial_update=extend_schema(tags=["Asignaciones"]),
     destroy=extend_schema(tags=["Asignaciones"]),
 )
 class AsignacionViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
-    """
-    Rutas:
-      GET    /api/asignaciones/                  -> lista TODAS las asignaciones
-      POST   /api/asignaciones/crear-asignacion/              -> asignar a un usuario formularios (dropdown+multiselect)
-      GET    /api/asignaciones/opciones          -> opciones para dropdowns (usuarios + formularios)
-      DELETE /api/asignaciones/{id}/             -> elimina una asignación puntual
-    """
     serializer_class = UserFormularioSerializer
     queryset = (UserFormulario.objects
                 .select_related("id_usuario", "id_formulario", "id_formulario__categoria")
@@ -725,11 +701,6 @@ class AsignacionViewSet(viewsets.ModelViewSet):
     @extend_schema(tags=["Asignaciones"], summary="Opciones para dropdowns")
     @action(detail=False, methods=["get"], url_path="opciones")
     def opciones(self, request):
-        """
-        Devuelve listas para poblar dropdowns:
-         - usuarios: top N (filtrables por ?q_user=)
-         - formularios: top M (filtrables por ?q_form=, ?categoria=)
-        """
         q_user = request.query_params.get("q_user", "")
         q_form = request.query_params.get("q_form", "")
         categoria = request.query_params.get("categoria")
@@ -785,14 +756,6 @@ class AsignacionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="crear-asignacion")
     @transaction.atomic
     def bulk_assign(self, request):
-        """
-        Body:
-        {
-          "usuario": "linda" | "<uuid-usuario>",
-          "formularios": ["<uuid-form-1>", "<uuid-form-2>", ...],
-          "replace": false
-        }
-        """
         ser = AsignacionBulkSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
 
