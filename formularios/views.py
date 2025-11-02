@@ -148,7 +148,7 @@ class FuenteDatosViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    @extend_schema(tags=["Datasets"], summary="Regenerar preview")
+    @extend_schema(exclude=True)
     @action(detail=True, methods=['post'], url_path='preview')
     def regenerate_preview(self, request, pk=None):
         """Re-generar preview desde Azure (útil si cambió el archivo)"""
@@ -180,14 +180,10 @@ class FuenteDatosViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
+    @extend_schema(tags=["Datasets"], summary="Update Dataset")
     @transaction.atomic
     def partial_update(self, request, *args, **kwargs):
-        """
-        PATCH /api/fuentes-datos/{id}/
-        - Si viene 'archivo', lo sube y actualiza blob_name/url/tipo_archivo.
-        - Siempre regenera columnas/preview desde el blob actual.
-        - Rematerializa FuenteDatosValor para TODOS los campos dataset que usan esta fuente.
-        """
+
         fuente = self.get_object()
         archivo = request.FILES.get("archivo")
         azure = AzureBlobStorageService()
@@ -913,7 +909,6 @@ class EntryExportViewSet(viewsets.GenericViewSet):
         resp["Content-Disposition"] = f'attachment; filename="{fname}"'
         return resp
 
-    # --- listado meta: /api/entries/ ---
     @extend_schema(
         tags=["Exportación"],
         operation_id="entries_list_meta",
@@ -929,29 +924,7 @@ class EntryExportViewSet(viewsets.GenericViewSet):
         ser = self.get_serializer(data, many=True)
         return Response(ser.data)
 
-    # --- masivo: /api/entries/export-all/ ---
-    @extend_schema(
-        tags=["Exportación"],
-        operation_id="entries_export_all",
-        summary="Exportar todos los formularios (ZIP)",
-        description="ZIP con un archivo por formulario en el formato elegido.",
-        parameters=[
-            OpenApiParameter(
-                name="format",
-                description="Formato de exportación dentro del ZIP",
-                required=False,
-                type=str,
-                location=OpenApiParameter.QUERY,
-                enum=["xlsx", "csv", "json"],
-                examples=[
-                    OpenApiExample("Excel (default)", value="xlsx"),
-                    OpenApiExample("CSV", value="csv"),
-                    OpenApiExample("JSON", value="json"),
-                ],
-            ),
-        ],
-        responses={200: OpenApiResponse(description="Archivo ZIP", response=OpenApiTypes.BINARY)},
-    )
+    @extend_schema(exclude=True) 
     @action(detail=False, methods=["get"], url_path="export-all")
     def export_all(self, request):
         fmt = (request.query_params.get("fmt") or "xlsx").lower()   # <--- aquí también
