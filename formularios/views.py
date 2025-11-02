@@ -1,6 +1,6 @@
 import json
 from formularios.exports import content_bytes_para_un_form, excel_bytes_para_un_form, zip_bytes_todos_los_forms
-from .services import _uuid32, _uuid32_no_dashes, crear_campo_en_pagina
+from .services import _materializar_dataset_para_campo, _uuid32, _uuid32_no_dashes, crear_campo_en_pagina
 from rest_framework import status, filters, viewsets
 from rest_framework.decorators import action
 from django.db import transaction
@@ -32,7 +32,7 @@ from django.shortcuts import get_object_or_404
     destroy=extend_schema(tags=["Datasets"]),
 )
 class FuenteDatosViewSet(viewsets.ModelViewSet):
-    http_method_names = ["get", "post", "delete", "head", "options"]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
     queryset = FuenteDatos.objects.all()
     serializer_class = FuenteDatosSerializer
     parser_classes = (MultiPartParser, FormParser)
@@ -179,6 +179,73 @@ class FuenteDatosViewSet(viewsets.ModelViewSet):
                 {"detail": f"Error regenerando preview: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+        
+    @transaction.atomic
+    def partial_update(self, request, *args, **kwargs):
+        """
+        PATCH /api/fuentes-datos/{id}/
+        - Si viene 'archivo', lo sube y actualiza blob_name/url/tipo_archivo.
+        - Siempre regenera columnas/preview desde el blob actual.
+        - Rematerializa FuenteDatosValor para TODOS los campos dataset que usan esta fuente.
+        """
+        fuente = self.get_object()
+        archivo = request.FILES.get("archivo")
+        azure = AzureBlobStorageService()
+
+        # 1) Si suben archivo nuevo, reemplazar en Azure y actualizar metadatos mínimos
+        if archivo:
+            ext = archivo.name.split(".")[-1].lower()
+            columnas, preview = azure.parse_file_preview(archivo, ext)
+            blob_name, blob_url = azure.upload_file(archivo, archivo.name)
+
+            fuente.archivo_nombre = archivo.name
+            fuente.blob_name = blob_name
+            fuente.blob_url = blob_url
+            fuente.tipo_archivo = "excel" if ext in ("xlsx", "xls") else "csv"
+            fuente.columnas = columnas
+            fuente.preview_data = preview
+            fuente.save()
+        else:
+            # 2) Aunque no suban archivo, refrescar columnas/preview desde el blob actual
+            from io import BytesIO
+            content = azure.download_file(fuente.blob_name)
+            file_obj = BytesIO(content)
+            ext = fuente.archivo_nombre.split(".")[-1].lower()
+            columnas, preview = azure.parse_file_preview(file_obj, ext)
+            fuente.columnas = columnas
+            fuente.preview_data = preview
+            fuente.save(update_fields=["columnas", "preview_data"])
+
+        # 3) Rematerializar catálogos (FDV) de todos los campos que usan esta fuente
+        campos = (Campo.objects
+                  .filter(dataset_vals__fuente=fuente)
+                  .distinct())
+        total_campos = 0
+        total_valores = 0
+        for c in campos:
+            try:
+                cfg = c.config
+                if isinstance(cfg, str):
+                    import json
+                    cfg = json.loads(cfg or "{}")
+                inserted = _materializar_dataset_para_campo(cfg or {}, c)
+                # guardar config normalizada (la función puede ajustar columnas/alias)
+                c.config = json.dumps(cfg or {}, ensure_ascii=False)
+                c.save(update_fields=["config"])
+                total_campos += 1
+                total_valores += int(inserted or 0)
+            except Exception as e:
+                # si algo falla en un campo particular, sigue con los demás
+                print(f"Rematerializar falló para campo {c.id_campo}: {e}")
+
+        data = FuenteDatosSerializer(fuente).data
+        data.update({
+            "rematerializacion": {
+                "campos_afectados": total_campos,
+                "valores_insertados": total_valores
+            }
+        })
+        return Response(data, status=status.HTTP_200_OK)
 
 def home(request):
     return HttpResponse("<h1>Bienvenido a la API de Formularios</h1><p>Usa /api/ para acceder a los endpoints.</p>")
