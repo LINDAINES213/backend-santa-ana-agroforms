@@ -36,6 +36,7 @@ jobs:
           args: >
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY_BE }}
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.sources=backend,formularios
+            -Dsonar.sources=.
             -Dsonar.python.coverage.reportPaths=coverage.xml
-            -Dsonar.exclusions=**/tests/**,**/__pycache__/**,**/migrations/**,**/migraciones/**,**/venv/**,**/.pytest_cache/**,**/.scannerwork/**
+            -Dsonar.exclusions=**/__pycache__/**,**/migrations/**,**/migraciones/**,**/venv/**,**/.pytest_cache/**,**/.scannerwork/**,**/locustfile.py,**/locustfile_security.py,**/.github/**,**/certs/**,**/scripts/**
+            -Dsonar.coverage.exclusions=**/locustfile.py,**/locustfile_security.py
