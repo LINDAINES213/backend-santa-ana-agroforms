@@ -1,0 +1,15 @@
+Cambios BD
+python manage.py makemigrations formularios
+python manage.py migrate
+
+Correr localmente
+python manage.py runserver 8081
+
+Update Docker Image
+
+docker login
+docker build -t lindain1333/santa-ana-api:latest .
+docker push lindain1333/santa-ana-api:latest
+
+Categoria de prueba
+2bab6091-a635-4bfb-971a-8cdcb5607052

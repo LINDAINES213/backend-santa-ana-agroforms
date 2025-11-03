@@ -1,0 +1,72 @@
+name: BE TruffleHog Secrets Scan
+
+on:
+  pull_request:
+    branches: [ "main", "dev", "feat/SANTAANA-v1.0"]
+  push:
+    branches: [ "dev", "feat/SANTAANA-v1.0" ]
+
+jobs:
+  trufflehog:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Necesario para escanear todo el historial de git
+
+      - name: TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --only-verified --exclude-paths=.trufflehogignore
+
+      - name: Exportar reporte JSON (filesystem)
+        if: ${{ always() }}
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+          if [ -f ".trufflehogignore" ]; then
+            trufflehog filesystem --only-verified --json --exclude-paths=.trufflehogignore . > trufflehog_filesystem.json 2>&1 || true
+          else
+            trufflehog filesystem --only-verified --json . > trufflehog_filesystem.json 2>&1 || true
+          fi
+
+      - name: Exportar reporte JSON (git history)
+        if: ${{ always() }}
+        run: |
+          if [ -f ".trufflehogignore" ]; then
+            trufflehog git --only-verified --json --exclude-paths=.trufflehogignore . > trufflehog_git.json 2>&1 || true
+          else
+            trufflehog git --only-verified --json . > trufflehog_git.json 2>&1 || true
+          fi
+
+      - name: Subir artefactos
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: be-trufflehog-reports
+          path: |
+            trufflehog_filesystem.json
+            trufflehog_git.json
+          retention-days: 30
+
+      - name: Resumen de resultados
+        if: ${{ always() }}
+        run: |
+          echo "### TruffleHog Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "trufflehog_filesystem.json" ]; then
+            FILESYSTEM_COUNT=$(grep -c "DetectorType" trufflehog_filesystem.json 2>/dev/null || echo "0")
+            echo "**Filesystem scan:** $FILESYSTEM_COUNT secretos verificados encontrados" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ -f "trufflehog_git.json" ]; then
+            GIT_COUNT=$(grep -c "DetectorType" trufflehog_git.json 2>/dev/null || echo "0")
+            echo "**Git history scan:** $GIT_COUNT secretos verificados encontrados" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Los reportes completos están disponibles en los artifacts de este workflow." >> $GITHUB_STEP_SUMMARY
