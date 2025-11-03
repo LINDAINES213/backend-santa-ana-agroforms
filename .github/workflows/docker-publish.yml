@@ -2,7 +2,7 @@ name: Build & Push Docker (Docker Hub)
 
 on:
   push:
-    branches: [ "dev" ]   # <-- rama dev
+    branches: [ "dev", "feat/SANTAANA-v1.0" ]   # <-- rama dev
   workflow_dispatch: {}
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/backend-agroforms
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/santa-ana-api
           tags: |
             type=raw,value=latest
             type=sha

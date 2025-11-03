@@ -1,0 +1,38 @@
+name: BE Snyk Security Scan
+
+on:
+  pull_request:
+    branches: ["main", "dev", "feat/SANTAANA-v1.0"]
+  push:
+    branches: ["dev", "feat/SANTAANA-v1.0"]
+
+jobs:
+  snyk-oss:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Snyk Open Source Monitor
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: monitor
+          args: --skip-unresolved
+      
+      - name: Snyk Open Source Test
+        uses: snyk/actions/python@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: test
