@@ -23,7 +23,13 @@ from drf_spectacular.types import OpenApiTypes
 from rest_framework import serializers, viewsets
 from django.shortcuts import get_object_or_404
 
+from django.http import JsonResponse
 
+def health_check(request):
+    return JsonResponse({
+        'status': 'healthy',
+        'service': 'formularios-api'
+    })
 
 @extend_schema_view(
     list=extend_schema(tags=["Datasets"]),

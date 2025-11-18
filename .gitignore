@@ -13,3 +13,4 @@ certs/**/*.p12
 *.dump
 *.sql
 .coverage
+staticfiles/

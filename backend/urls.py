@@ -25,6 +25,7 @@ from drf_spectacular.views import (
     SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 )
 from django.views.generic.base import RedirectView
+from formularios.views import health_check
 
 
 urlpatterns = [
@@ -37,4 +38,5 @@ urlpatterns = [
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
     path('oauth/', include('oauth2_provider.urls', namespace='oauth2_provider')),
     path('api-auth/', include('rest_framework.urls')),
+    path('api/health/', health_check, name='health_check'),
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
