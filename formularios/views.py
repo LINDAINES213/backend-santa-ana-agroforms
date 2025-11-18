@@ -24,11 +24,24 @@ from rest_framework import serializers, viewsets
 from django.shortcuts import get_object_or_404
 
 from django.http import JsonResponse
+import logging
 
+logger = logging.getLogger(__name__)
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # ← Sin autenticación
 def health_check(request):
-    return JsonResponse({
-        'status': 'healthy',
-        'service': 'formularios-api'
+    """
+    Endpoint de health check para monitoreo
+    No requiere autenticación
+    """
+    logger.info("Health check accessed")
+    
+    return Response({
+        "status": "healthy",
+        "service": "Santa Ana AgroForms API",
     })
 
 @extend_schema_view(
