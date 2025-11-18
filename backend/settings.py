@@ -73,6 +73,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "backend.middlewares.logging_middleware.ELKLoggingMiddleware"
 ]
 
 ROOT_URLCONF = "backend.urls"
@@ -115,18 +116,7 @@ DATABASES = {
         },
     }
 }
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'mssql',
-#         'NAME': os.getenv('DATABASE_NAME'),
-#         'USER': os.getenv('DATABASE_USER'),
-#         'PASSWORD': os.getenv('DATABASE_PASSWORD'),
-#         'HOST': os.getenv('DATABASE_HOST'),
-#         'OPTIONS': {
-#                     'driver': 'ODBC Driver 17 for SQL Server',
-#         },
-#     }
-# }
+
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 REST_FRAMEWORK = {
@@ -259,3 +249,68 @@ STATICFILES_DIRS = [
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+DEBUG = True
+
+LOGS_DIR = BASE_DIR / 'logs'
+LOGS_DIR.mkdir(exist_ok=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    
+    'formatters': {
+        'json': {
+            '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
+            'format': '%(asctime)s %(name)s %(levelname)s %(message)s',
+            'rename_fields': {
+                'asctime': '@timestamp',
+                'levelname': 'log.level',
+                'name': 'logger.name',
+            }
+        },
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    
+    'handlers': {
+        'file_json': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOGS_DIR / 'api.log',
+            'maxBytes': 10485760,  # 10MB
+            'backupCount': 5,
+            'formatter': 'json',
+        },
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    
+    'loggers': {
+        'api.requests': {
+            'handlers': ['file_json', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django': {
+            'handlers': ['file_json', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'formularios': {
+            'handlers': ['file_json', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+    
+    'root': {
+        'handlers': ['file_json', 'console'],
+        'level': 'INFO',
+    },
+}
