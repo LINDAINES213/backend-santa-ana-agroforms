@@ -581,20 +581,20 @@ class FormularioViewSet(viewsets.ModelViewSet):
 
         return Response({"ok": True, "id_pagina": str(nueva_pagina.id_pagina)}, status=201)
 
-    @extend_schema(tags=["Formularios"], summary="Suspender Formulario")
+    @extend_schema(tags=["Formularios"], summary="Suspender Formulario", request=None)
     @action(detail=True, methods=["post"], url_path="suspender")
     def suspender(self, request, *args, **kwargs):
         form = self.get_object()
         if (form.estado or "").lower() == "suspendida":
-            return Response({"detail": "El formulario ya está en estado 'Suspendida'."}, status=200)
-        form.estado = "Suspendida"
+            return Response({"detail": "El formulario ya está en estado 'Suspendido'."}, status=200)
+        form.estado = "Suspendido"
         form.save(update_fields=["estado"])
         return Response({"ok": True, "id": str(form.id), "estado": form.estado}, status=200)
 
     @extend_schema(tags=["Formularios"], summary="No permite abrir formularios suspendidos")
     def retrieve(self, request, *args, **kwargs):
         obj = self.get_object()
-        if (obj.estado or "").lower() == "suspendida":
+        if (obj.estado or "").lower() == "suspendido":
             return Response(
                 {"detail": "Formulario suspendido. Solo puede editar el estado para reactivarlo."},
                 status=423  # Locked
@@ -605,7 +605,7 @@ class FormularioViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         """Si está Suspendida, permitir modificar ÚNICAMENTE el campo 'estado'."""
         obj = self.get_object()
-        if (obj.estado or "").lower() == "suspendida":
+        if (obj.estado or "").lower() == "suspendido":
             campos = set((request.data or {}).keys())
             if campos - {"estado"}:
                 return Response(
@@ -613,6 +613,36 @@ class FormularioViewSet(viewsets.ModelViewSet):
                     status=423
                 )
         return super().partial_update(request, *args, **kwargs)
+    
+    @extend_schema(
+        tags=["Formularios"], 
+        summary="Listar formularios suspendidos o inactivos",
+        description="Retorna todos los formularios con estado 'Suspendido'",
+        responses={200: FormularioListSerializer(many=True)}
+    )
+    @action(detail=False, methods=["get"], url_path="suspendidos")
+    def listar_suspendidos(self, request):
+        """
+        Endpoint para listar formularios que están suspendidos o inactivos.
+        Estados considerados inactivos: 'Suspendido'
+        """
+        # Filtrar formularios con estados inactivos
+        formularios_inactivos = Formulario.objects.filter(
+            Q(estado__iexact="Suspendido") | Q(estado__iexact="Suspendida")
+        ).select_related('categoria').order_by('-disponible_hasta_fecha', 'nombre')
+        
+        # Serializar y retornar
+        serializer = FormularioListSerializer(
+            formularios_inactivos, 
+            many=True,
+            context={'request': request}
+        )
+        
+        return Response({
+            "count": formularios_inactivos.count(),
+            "results": serializer.data
+        }, status=status.HTTP_200_OK)
+
 
 @extend_schema_view(
     list=extend_schema(tags=["Usuarios"]),
