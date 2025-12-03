@@ -14,7 +14,7 @@ import uuid
 from django.db.models import Q, Count
 from .azure_storage import AzureBlobStorageService
 from .models import FuenteDatos
-from .serializers import FuenteDatosSerializer, FuenteDatosCreateSerializer
+from .serializers import FuenteDatosSerializer, FuenteDatosCreateSerializer, EntryFormularioListSerializer, EntryRespuestaSerializer, EntryRespuestaUpdateSerializer
 from rest_framework.parsers import MultiPartParser, FormParser
 from . import services
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample, OpenApiParameter, inline_serializer
@@ -983,3 +983,301 @@ class EntryExportViewSet(viewsets.GenericViewSet):
         resp = HttpResponse(content, content_type="application/zip")
         resp["Content-Disposition"] = f'attachment; filename="{fname}"'
         return resp
+
+@extend_schema_view(
+    list=extend_schema(tags=["Entries - Gestión"], summary="Listar formularios con entries"),
+)
+class EntryManagementViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet para gestión de entries"""
+    queryset = Formulario.objects.all()
+    serializer_class = EntryFormularioListSerializer
+    
+    def get_queryset(self):
+        """Filtrar solo formularios con entries"""
+        formularios_con_entries = (
+            FormularioEntry.objects
+            .values_list('form_id', flat=True)
+            .distinct()
+        )
+        return (
+            Formulario.objects
+            .filter(id__in=formularios_con_entries)
+            .select_related('categoria')
+            .order_by('nombre')
+        )
+    
+    @extend_schema(
+        tags=["Entries - Gestión"],
+        summary="Ver respuestas de un formulario",
+        responses={200: EntryRespuestaSerializer(many=True)}
+    )
+    @action(detail=True, methods=['get'])
+    def respuestas(self, request, pk=None):
+        """
+        GET /entries-management/{form_id}/respuestas/
+        
+        Retorna todas las respuestas del formulario
+        """
+        try:
+            formulario = self.get_object()
+        except Formulario.DoesNotExist:
+            return Response({"detail": "Formulario no encontrado"}, status=404)
+        
+        entries = (
+            FormularioEntry.objects
+            .filter(form_id=pk)
+            .order_by('-created_at')
+        )
+        
+        serializer = EntryRespuestaSerializer(entries, many=True)
+        
+        return Response({
+            "formulario": {
+                "id": str(formulario.id),
+                "nombre": formulario.nombre,
+                "categoria": formulario.categoria.nombre if formulario.categoria else None,
+            },
+            "total_respuestas": entries.count(),
+            "respuestas": serializer.data
+        })
+    
+    @extend_schema(
+        tags=["Entries - Gestión"],
+        summary="Editar una respuesta",
+        request=inline_serializer(
+            name='EditarRespuestaRequest',
+            fields={
+                'fill_json': serializers.DictField(required=False),
+                'status': serializers.CharField(required=False, max_length=50)
+            }
+        ),
+        examples=[
+            OpenApiExample(
+                'Editar campos',
+                value={
+                    "fill_json": {
+                        "Tipo de cultivo": "Maíz",
+                        "xd": True,
+                        "wewq": "2025-11-25"
+                    }
+                },
+                request_only=True,
+            )
+        ]
+    )
+    @action(detail=True, methods=['patch'], url_path='editar-respuesta/(?P<entry_id>[^/.]+)')
+    def editar_respuesta(self, request, pk=None, entry_id=None):
+        """
+        PATCH /entries-management/{form_id}/editar-respuesta/{entry_id}/
+        
+        Body: {"fill_json": {"campo1": "valor1"}}
+        """
+        try:
+            entry = FormularioEntry.objects.get(id=entry_id, form_id=pk)
+        except FormularioEntry.DoesNotExist:
+            return Response({"detail": "Respuesta no encontrada"}, status=404)
+        
+        # Actualizar fill_json
+        if 'fill_json' in request.data:
+            nuevos_campos = request.data['fill_json']
+            current_fill_json = entry.fill_json or {}
+            
+            if current_fill_json:
+                # Obtener UUID de página (primer key)
+                pagina_uuid = list(current_fill_json.keys())[0]
+                # Actualizar campos dentro del UUID
+                current_fill_json[pagina_uuid].update(nuevos_campos)
+                entry.fill_json = current_fill_json
+        
+        # Actualizar status
+        if 'status' in request.data:
+            entry.status = request.data['status']
+        
+        # Timestamp
+        from django.utils import timezone
+        entry.updated_at = timezone.now()
+        entry.save()
+        
+        # Retornar
+        response_serializer = EntryRespuestaSerializer(entry)
+        return Response({
+            "detail": "Respuesta actualizada exitosamente",
+            "respuesta": response_serializer.data
+        })
+        
+    # @extend_schema(
+    #     tags=["Entries - Gestión"],
+    #     summary="Eliminar una respuesta",
+    #     description="Elimina una respuesta específica del formulario",
+    #     request=inline_serializer(
+    #         name='EliminarRespuestaRequest',
+    #         fields={
+    #             'entry_id': serializers.UUIDField(help_text="ID de la respuesta a eliminar")
+    #         }
+    #     ),
+    #     examples=[
+    #         OpenApiExample(
+    #             'Eliminar respuesta',
+    #             value={
+    #                 "entry_id": "ec8f5a5b-dea6-4d12-a3b3-12ecc1aceb19"
+    #             },
+    #             request_only=True,
+    #         )
+    #     ],
+    #     responses={
+    #         200: OpenApiResponse(description="Respuesta eliminada"),
+    #         404: OpenApiResponse(description="Respuesta no encontrada")
+    #     }
+    # )
+    # @action(detail=True, methods=['delete'], url_path='eliminar-respuesta')
+    # def eliminar_respuesta(self, request, pk=None):
+    #     """
+    #     DELETE /entries-management/{form_id}/eliminar-respuesta/
+        
+    #     Body: {
+    #         "entry_id": "uuid-de-la-respuesta"
+    #     }
+    #     """
+    #     entry_id = request.data.get('entry_id')
+        
+    #     if not entry_id:
+    #         return Response(
+    #             {"detail": "Debe proporcionar entry_id"},
+    #             status=status.HTTP_400_BAD_REQUEST
+    #         )
+        
+    #     try:
+    #         entry = FormularioEntry.objects.get(id=entry_id, form_id=pk)
+    #     except FormularioEntry.DoesNotExist:
+    #         return Response(
+    #             {"detail": "Respuesta no encontrada"},
+    #             status=status.HTTP_404_NOT_FOUND
+    #         )
+        
+    #     entry_info = {
+    #         "id": str(entry.id),
+    #         "usuario": entry.id_usuario,
+    #         "llenado": entry.filled_at_local
+    #     }
+        
+    #     entry.delete()
+        
+    #     return Response({
+    #         "detail": "Respuesta eliminada exitosamente",
+    #         "eliminada": entry_info
+    #     })
+    
+    @extend_schema(
+        tags=["Entries - Gestión"],
+        summary="Eliminar múltiples respuestas",
+        description="Elimina varias respuestas del formulario a la vez",
+        request=inline_serializer(
+            name='EliminarMultipleRequest',
+            fields={
+                'ids': serializers.ListField(
+                    child=serializers.UUIDField(),
+                    help_text="Lista de UUIDs de respuestas a eliminar"
+                )
+            }
+        ),
+        examples=[
+            OpenApiExample(
+                'Eliminar 2 respuestas',
+                value={
+                    "ids": [
+                        "ec8f5a5b-dea6-4d12-a3b3-12ecc1aceb19",
+                        "cedada44-1cb3-42d6-b118-69c1ecd2ccdb"
+                    ]
+                },
+                request_only=True,
+            )
+        ],
+        responses={
+            200: OpenApiResponse(description="Respuestas eliminadas"),
+            400: OpenApiResponse(description="IDs inválidos"),
+            404: OpenApiResponse(description="No se encontraron respuestas")
+        }
+    )
+    @action(detail=True, methods=['post'], url_path='eliminar-respuestas')
+    def eliminar_respuestas(self, request, pk=None):
+        """
+        POST /entries-management/{form_id}/eliminar-respuestas/
+        
+        Body: {
+            "ids": ["uuid1", "uuid2", ...]
+        }
+        """
+        ids = request.data.get('ids', [])
+        
+        if not ids:
+            return Response(
+                {"detail": "Debe proporcionar una lista de IDs"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from uuid import UUID
+            validated_ids = [UUID(str(id_str)) for id_str in ids]
+        except:
+            return Response(
+                {"detail": "IDs inválidos"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        entries = FormularioEntry.objects.filter(
+            id__in=validated_ids,
+            form_id=pk
+        )
+        
+        count = entries.count()
+        if count == 0:
+            return Response(
+                {"detail": "No se encontraron respuestas"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        entries.delete()
+        
+        return Response({
+            "detail": f"{count} respuestas eliminadas exitosamente",
+            "deleted_count": count
+        })
+    
+    @extend_schema(
+        tags=["Entries - Gestión"],
+        summary="Estadísticas del formulario",
+        responses={200: OpenApiResponse(description="Estadísticas")}
+    )
+    @action(detail=True, methods=['get'])
+    def estadisticas(self, request, pk=None):
+        """
+        GET /entries-management/{form_id}/estadisticas/
+        """
+        entries = FormularioEntry.objects.filter(form_id=pk)
+        
+        por_estado = list(entries.values('status').annotate(total=Count('id')).order_by('-total'))
+        por_usuario = list(
+            entries.exclude(id_usuario__isnull=True)
+            .values('id_usuario')
+            .annotate(total=Count('id'))
+            .order_by('-total')[:10]
+        )
+        
+        for stat in por_usuario:
+            try:
+                usuario = Usuario.objects.get(nombre_usuario=stat['id_usuario'])
+                stat['nombre'] = usuario.nombre
+            except:
+                stat['nombre'] = stat['id_usuario']
+        
+        fechas = entries.aggregate(
+            primera=models.Min('created_at'),
+            ultima=models.Max('created_at')
+        )
+        
+        return Response({
+            "total_respuestas": entries.count(),
+            "por_estado": por_estado,
+            "por_usuario": por_usuario,
+            "fechas": fechas
+        })

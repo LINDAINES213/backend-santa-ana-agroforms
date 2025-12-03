@@ -5,7 +5,7 @@ from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework import status
 from .models import (
-    Campo, Categoria, Formulario, FormularioIndexVersion, 
+    Campo, Categoria, Formulario, FormularioEntry, FormularioIndexVersion, 
     FuenteDatos, FuenteDatosValor, Grupo, Pagina, 
     Pagina_Index_Version, PaginaCampo, PaginaVersion, 
     UserFormulario, Usuario, Formulario_Index_Version
@@ -656,3 +656,60 @@ class AsignacionBulkSerializer(serializers.Serializer):
         attrs["user_obj"] = user
         attrs["form_ids"] = list(existentes)
         return attrs
+
+class EntryFormularioListSerializer(serializers.ModelSerializer):
+    """Lista de formularios con entries"""
+    categoria_nombre = serializers.SerializerMethodField()
+    total_respuestas = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Formulario
+        fields = ['id', 'nombre', 'categoria_nombre', 'total_respuestas']
+    
+    def get_categoria_nombre(self, obj):
+        return obj.categoria.nombre if obj.categoria else None
+    
+    def get_total_respuestas(self, obj):
+        return FormularioEntry.objects.filter(form_id=obj.id).count()
+
+
+class EntryRespuestaSerializer(serializers.ModelSerializer):
+    """Detalle de respuestas individuales"""
+    usuario_nombre = serializers.SerializerMethodField()
+    respuesta_data = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = FormularioEntry
+        fields = [
+            'id', 'id_usuario', 'usuario_nombre', 'status',
+            'filled_at_local', 'created_at', 'updated_at', 'respuesta_data'
+        ]
+    
+    def get_usuario_nombre(self, obj):
+        if obj.id_usuario:
+            try:
+                usuario = Usuario.objects.get(nombre_usuario=obj.id_usuario)
+                return usuario.nombre
+            except Usuario.DoesNotExist:
+                return obj.id_usuario
+        return None
+    
+    def get_respuesta_data(self, obj):
+        return obj.fill_json if obj.fill_json else {}
+
+
+class EntryRespuestaUpdateSerializer(serializers.Serializer):
+    """Para actualizar respuestas"""
+    fill_json = serializers.JSONField(required=False)
+    status = serializers.CharField(required=False, max_length=50)
+    
+    def update(self, instance, validated_data):
+        if 'fill_json' in validated_data:
+            instance.fill_json = validated_data['fill_json']
+        if 'status' in validated_data:
+            instance.status = validated_data['status']
+        
+        from django.utils import timezone
+        instance.updated_at = timezone.now()
+        instance.save()
+        return instance
