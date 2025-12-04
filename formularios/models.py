@@ -3,6 +3,9 @@ import uuid
 
 from formularios.auth_models import UsuarioManager
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from cryptography.fernet import Fernet
+from django.conf import settings
+import os
 
 try:
     from django.db.models import JSONField
@@ -243,26 +246,28 @@ class PaginaCampo(models.Model):
         db_table = "formularios_pagina_campo"
         unique_together = (("id_campo", "id_pagina_version"),) 
 
-class FuenteDatos(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    nombre = models.CharField(max_length=200)
-    descripcion = models.TextField(blank=True)
-    archivo_nombre = models.CharField(max_length=255)  # nombre original
-    blob_name = models.CharField(max_length=500)  # nombre en Azure
-    blob_url = models.URLField(max_length=1000)
-    tipo_archivo = models.CharField(max_length=10, choices=[('excel', 'Excel'), ('csv', 'CSV')])
-    columnas = models.JSONField(default=list)  # lista de nombres de columnas
-    preview_data = models.JSONField(default=list)  # primeras 5 filas para preview
-    fecha_subida = models.DateTimeField(auto_now_add=True)
-    activo = models.BooleanField(default=True)
-    creado_por = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, related_name='fuentes_datos')
+# class FuenteDatos(models.Model):
+#     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+#     nombre = models.CharField(max_length=200)
+#     descripcion = models.TextField(blank=True)
+#     archivo_nombre = models.CharField(max_length=255)  # nombre original
+#     blob_name = models.CharField(max_length=500)  # nombre en Azure
+#     blob_url = models.URLField(max_length=1000)
+#     tipo_archivo = models.CharField(max_length=10, choices=[('excel', 'Excel'), ('csv', 'CSV')])
+#     columnas = models.JSONField(default=list)  # lista de nombres de columnas
+#     preview_data = models.JSONField(default=list)  # primeras 5 filas para preview
+#     fecha_subida = models.DateTimeField(auto_now_add=True)
+#     activo = models.BooleanField(default=True)
+#     creado_por = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, related_name='fuentes_datos')
 
-    class Meta:
-        db_table = 'formularios_fuente_datos'
-        ordering = ['-fecha_subida']
+#     class Meta:
+#         db_table = 'formularios_fuente_datos'
+#         ordering = ['-fecha_subida']
 
-    def __str__(self):
-        return self.nombre
+#     def __str__(self):
+#         return self.nombre
+
+
 
 class FuenteDatosValor(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -341,3 +346,163 @@ class FormularioEntry(models.Model):
 
     def __str__(self):
         return f"{self.form_name} · {self.id}"
+    
+class ConexionSQL(models.Model):
+    """
+    Almacena credenciales para conectar a bases de datos SQL externas
+    """
+    TIPO_BD_CHOICES = [
+        ('postgresql', 'PostgreSQL'),
+        ('mysql', 'MySQL'),
+        ('sqlserver', 'SQL Server'),
+        ('oracle', 'Oracle'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nombre = models.CharField(max_length=200, help_text="Nombre descriptivo de la conexión")
+    descripcion = models.TextField(blank=True)
+    tipo_bd = models.CharField(max_length=20, choices=TIPO_BD_CHOICES)
+    host = models.CharField(max_length=255)
+    puerto = models.IntegerField()
+    database = models.CharField(max_length=100)
+    usuario = models.CharField(max_length=100)
+    password_encrypted = models.BinaryField()  # Contraseña encriptada
+    
+    activo = models.BooleanField(default=True)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    creado_por = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, related_name='conexiones_sql')
+    
+    # Opciones adicionales (como string de conexión extra)
+    opciones_extra = models.JSONField(default=dict, blank=True)
+    
+    class Meta:
+        db_table = 'formularios_conexion_sql'
+        ordering = ['nombre']
+    
+    def __str__(self):
+        return f"{self.nombre} ({self.tipo_bd})"
+    
+    def set_password(self, raw_password: str):
+        """Encripta y guarda la contraseña"""
+        key = self._get_encryption_key()
+        f = Fernet(key)
+        self.password_encrypted = f.encrypt(raw_password.encode())
+    
+    def get_password(self) -> str:
+        """Desencripta y retorna la contraseña"""
+        key = self._get_encryption_key()
+        f = Fernet(key)
+        return f.decrypt(self.password_encrypted).decode()
+    
+    @staticmethod
+    def _get_encryption_key():
+        """Obtiene la clave de encriptación desde settings o env"""
+        key = getattr(settings, 'SQL_PASSWORD_ENCRYPTION_KEY', None)
+        if not key:
+            key = os.getenv('SQL_PASSWORD_ENCRYPTION_KEY')
+        if not key:
+            raise ValueError("SQL_PASSWORD_ENCRYPTION_KEY no está configurada")
+        return key.encode()
+
+
+class ConsultaSQL(models.Model):
+    """
+    Almacena queries SQL que se ejecutan en conexiones externas
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    conexion = models.ForeignKey(ConexionSQL, on_delete=models.CASCADE, related_name='consultas')
+    nombre = models.CharField(max_length=200)
+    descripcion = models.TextField(blank=True)
+    query_sql = models.TextField(help_text="Query SQL (solo SELECT permitido)")
+    
+    # Configuración para mapeo de datos
+    columna_value = models.CharField(max_length=100, help_text="Columna que se usará como 'value'")
+    columna_label = models.CharField(max_length=100, help_text="Columna que se usará como 'label'")
+    columnas_extra = models.JSONField(default=list, blank=True, help_text="Columnas adicionales a incluir")
+    
+    # Cache
+    cache_minutos = models.IntegerField(default=60, help_text="Tiempo de cache en minutos")
+    ultima_ejecucion = models.DateTimeField(null=True, blank=True)
+    resultado_cache = models.JSONField(null=True, blank=True)
+    
+    activo = models.BooleanField(default=True)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    creado_por = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, related_name='consultas_sql')
+    
+    class Meta:
+        db_table = 'formularios_consulta_sql'
+        ordering = ['nombre']
+    
+    def __str__(self):
+        return f"{self.nombre} - {self.conexion.nombre}"
+    
+class FuenteDatos(models.Model):
+    """
+    Fuente de datos para campos de autocompletado
+    Puede ser: archivo (Excel/CSV) o consulta SQL
+    """
+    TIPO_FUENTE_CHOICES = [
+        ('archivo', 'Archivo (Excel/CSV)'),
+        ('sql', 'Consulta SQL'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    nombre = models.CharField(max_length=200)
+    descripcion = models.TextField(blank=True)
+    
+    # Tipo de fuente
+    tipo_fuente = models.CharField(
+        max_length=20, 
+        choices=TIPO_FUENTE_CHOICES, 
+        default='archivo'
+    )
+    
+    # Campos para fuentes tipo ARCHIVO
+    archivo_nombre = models.CharField(max_length=255, null=True, blank=True)
+    blob_name = models.CharField(max_length=500, null=True, blank=True)
+    blob_url = models.URLField(max_length=1000, null=True, blank=True)
+    tipo_archivo = models.CharField(
+        max_length=10, 
+        choices=[('excel', 'Excel'), ('csv', 'CSV')],
+        null=True, 
+        blank=True
+    )
+    
+    # Campos para fuentes tipo SQL
+    consulta_sql = models.ForeignKey(
+        ConsultaSQL, 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True,
+        related_name='fuentes_datos'
+    )
+    
+    # Campos comunes
+    columnas = models.JSONField(default=list)
+    preview_data = models.JSONField(default=list)
+    fecha_subida = models.DateTimeField(auto_now_add=True)
+    activo = models.BooleanField(default=True)
+    creado_por = models.ForeignKey(
+        Usuario, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        related_name='fuentes_datos'
+    )
+
+    class Meta:
+        db_table = 'formularios_fuente_datos'
+        ordering = ['-fecha_subida']
+
+    def __str__(self):
+        return f"{self.nombre} ({self.get_tipo_fuente_display()})"
+    
+    def clean(self):
+        """Validación: debe tener archivo O consulta SQL, no ambos"""
+        from django.core.exceptions import ValidationError
+        
+        if self.tipo_fuente == 'archivo':
+            if not self.archivo_nombre or not self.blob_name:
+                raise ValidationError("Fuente tipo 'archivo' requiere archivo_nombre y blob_name")
+        elif self.tipo_fuente == 'sql':
+            if not self.consulta_sql:
+                raise ValidationError("Fuente tipo 'sql' requiere consulta_sql")
