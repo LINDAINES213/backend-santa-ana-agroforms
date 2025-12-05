@@ -1,7 +1,8 @@
+from datetime import datetime
 import json
 from formularios.exports import content_bytes_para_un_form, excel_bytes_para_un_form, zip_bytes_todos_los_forms
 from formularios.sql_service import SQLConnectionService
-from .services import _materializar_dataset_from_fuente, _uuid32, _uuid32_no_dashes, crear_campo_en_pagina
+from .services import _build_schema_from_form_json, _materializar_dataset_from_fuente, _normalize_and_validate_value, _uuid32, _uuid32_no_dashes, crear_campo_en_pagina
 from rest_framework import status, filters, viewsets
 from rest_framework.decorators import action
 from django.db import transaction
@@ -26,6 +27,8 @@ from django.shortcuts import get_object_or_404
 
 from django.http import JsonResponse
 import logging
+from django.core.exceptions import ValidationError
+
 
 logger = logging.getLogger(__name__)
 from rest_framework.decorators import api_view, permission_classes
@@ -1041,7 +1044,7 @@ class EntryManagementViewSet(viewsets.ReadOnlyModelViewSet):
             "total_respuestas": entries.count(),
             "respuestas": serializer.data
         })
-    
+
     @extend_schema(
         tags=["Entries - Gestión"],
         summary="Editar una respuesta",
@@ -1068,38 +1071,46 @@ class EntryManagementViewSet(viewsets.ReadOnlyModelViewSet):
     )
     @action(detail=True, methods=['patch'], url_path='editar-respuesta/(?P<entry_id>[^/.]+)')
     def editar_respuesta(self, request, pk=None, entry_id=None):
-        """
-        PATCH /entries-management/{form_id}/editar-respuesta/{entry_id}/
-        
-        Body: {"fill_json": {"campo1": "valor1"}}
-        """
         try:
             entry = FormularioEntry.objects.get(id=entry_id, form_id=pk)
         except FormularioEntry.DoesNotExist:
             return Response({"detail": "Respuesta no encontrada"}, status=404)
         
-        # Actualizar fill_json
+        # ----- VALIDAR Y ACTUALIZAR fill_json -----
         if 'fill_json' in request.data:
-            nuevos_campos = request.data['fill_json']
+            nuevos_campos = request.data['fill_json']  # dict plano: {nombre_interno: valor}
             current_fill_json = entry.fill_json or {}
-            
+
+            # 1) construir schema desde form_json del entry
+            schema = _build_schema_from_form_json(entry.form_json)
+
+            # 2) validar cada valor según la clase del campo
+            try:
+                campos_normalizados = {}
+                for nombre, valor in (nuevos_campos or {}).items():
+                    meta = schema.get(nombre)
+                    if not meta:
+                        # puedes decidir si ignorar campos desconocidos o lanzar error
+                        raise ValidationError({nombre: "Campo no existe en el formulario."})
+                    campos_normalizados[nombre] = _normalize_and_validate_value(nombre, valor, meta)
+            except ValidationError as e:
+                # convertir ValidationError de Django a DRF
+                raise ValidationError(e.message_dict if hasattr(e, "message_dict") else e.messages)
+
+            # 3) aplicar cambios si todo pasó
             if current_fill_json:
-                # Obtener UUID de página (primer key)
                 pagina_uuid = list(current_fill_json.keys())[0]
-                # Actualizar campos dentro del UUID
-                current_fill_json[pagina_uuid].update(nuevos_campos)
+                current_fill_json[pagina_uuid].update(campos_normalizados)
                 entry.fill_json = current_fill_json
-        
-        # Actualizar status
+
+        # ----- STATUS -----
         if 'status' in request.data:
             entry.status = request.data['status']
         
-        # Timestamp
         from django.utils import timezone
         entry.updated_at = timezone.now()
         entry.save()
         
-        # Retornar
         response_serializer = EntryRespuestaSerializer(entry)
         return Response({
             "detail": "Respuesta actualizada exitosamente",

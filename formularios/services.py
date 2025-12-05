@@ -926,3 +926,90 @@ def crear_nueva_version_pagina(pagina: Pagina, usuario=None, razon: str = None) 
                 )
     
     return nueva_version
+
+def _build_schema_from_form_json(form_json_raw):
+        """
+        Recibe form_json (dict o str) y devuelve:
+        { nombre_interno: {"clase": ..., "requerido": bool, "campo": {...}} }
+        """
+        if not form_json_raw:
+            return {}
+
+        if isinstance(form_json_raw, str):
+            try:
+                form_json = json.loads(form_json_raw)
+            except Exception:
+                return {}
+        else:
+            form_json = form_json_raw
+
+        schema = {}
+
+        for pagina in form_json.get("paginas", []):
+            for campo in pagina.get("campos", []):
+                nombre = campo.get("nombre_interno") or campo.get("nombre_campo")
+                if not nombre:
+                    continue
+                schema[nombre] = {
+                    "clase": (campo.get("clase") or "").lower(),
+                    "requerido": bool(campo.get("requerido", False)),
+                    "campo": campo,
+                }
+
+        return schema
+
+def _normalize_and_validate_value(nombre, value, meta):
+    clase = (meta.get("clase") or "").lower()
+    requerido = meta.get("requerido", False)
+
+    # Tratar None / vacío
+    if value in ("", None):
+        if requerido:
+            raise ValidationError({nombre: "Este campo es requerido y no puede estar vacío."})
+        return value  # permitido dejarlo vacío si no es requerido
+
+    # BOOLEAN
+    if clase == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("true", "1", "sí", "si"):
+                return True
+            if v in ("false", "0", "no"):
+                return False
+        raise ValidationError({nombre: "Debe ser booleano (true/false)."})
+
+    # NUMBER
+    if clase == "number":
+        try:
+            return float(value)
+        except Exception:
+            raise ValidationError({nombre: "Debe ser un número válido."})
+
+    # DATE (YYYY-MM-DD)
+    if clase == "date":
+        if not isinstance(value, str):
+            raise ValidationError({nombre: "La fecha debe ser un string en formato YYYY-MM-DD."})
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+            return value
+        except Exception:
+            raise ValidationError({nombre: "Formato de fecha inválido. Usa YYYY-MM-DD."})
+
+    # HOUR (HH:MM)
+    if clase == "hour":
+        if not isinstance(value, str):
+            raise ValidationError({nombre: "La hora debe ser un string en formato HH:MM."})
+        if not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", value):
+            raise ValidationError({nombre: "Formato de hora inválido. Usa HH:MM (00:00-23:59)."})
+        return value
+
+    # STRING / TEXTO → solo strings
+    if clase in ("string", "texto", "text"):
+        if not isinstance(value, str):
+            raise ValidationError({nombre: "Debe ser texto (cadena de caracteres)."})
+        return value
+
+    # Cualquier otra clase que no estemos tratando aún
+    return value
