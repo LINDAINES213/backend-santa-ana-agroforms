@@ -340,7 +340,7 @@ class FormularioEntry(models.Model):
     updated_at = models.DateTimeField(db_column="updated_at")
 
     class Meta:
-        managed = False
+        # managed = False
         db_table = "formularios_entry"
         ordering = ("-created_at",)
 
@@ -541,3 +541,37 @@ class FuenteDatos(models.Model):
         elif self.tipo_fuente == 'sql':
             if not self.consulta_sql:
                 raise ValidationError("Fuente tipo 'sql' requiere consulta_sql")
+
+class UserTerminal(models.Model):
+    """
+    Almacena información de terminales/dispositivos asociados a usuarios.
+    Útil para tracking de sesiones, dispositivos registrados, etc.
+    """
+    id = models.BigAutoField(primary_key=True)
+    
+    nombre_usuario = models.ForeignKey(
+        Usuario,
+        on_delete=models.CASCADE,
+        to_field='nombre_usuario',
+        db_column='nombre_usuario',
+        related_name='terminales'
+    )
+    
+    terminal_info = models.TextField(
+        help_text="Información del terminal/dispositivo (JSON, user agent, etc.)"
+    )
+    
+    date = models.DateTimeField(
+        auto_now_add=True,
+        help_text="Fecha de registro del terminal"
+    )
+    
+    class Meta:
+        db_table = 'formularios_user_terminal'
+        ordering = ['-date']
+        verbose_name = 'Terminal de Usuario'
+        verbose_name_plural = 'Terminales de Usuario'
+        # managed = False
+    
+    def __str__(self):
+        return f"{self.nombre_usuario.nombre_usuario} - {self.date.strftime('%Y-%m-%d %H:%M')}"
