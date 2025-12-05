@@ -4,7 +4,7 @@ from formularios import auth_views
 from rest_framework.routers import DefaultRouter
 
 from formularios.views_dashboard import dashboard_resumen
-from .views import AsignacionViewSet, CategoriaViewSet, EntryExportViewSet, FormularioViewSet, FuenteDatosViewSet, GrupoViewSet, PaginaViewSet, UsuarioViewSet, CampoViewSet, FormularioListViewSet, EntryManagementViewSet
+from .views import AsignacionViewSet, CategoriaViewSet, ConexionSQLViewSet, ConsultaSQLViewSet, EntryExportViewSet, FormularioViewSet, FuenteDatosViewSet, GrupoViewSet, PaginaViewSet, UsuarioViewSet, CampoViewSet, FormularioListViewSet, EntryManagementViewSet
 
 router = DefaultRouter()
 router.register(r'formularios', FormularioViewSet, basename='formulario')
@@ -18,8 +18,8 @@ router.register(r'grupos', GrupoViewSet, basename='grupos')
 router.register(r"asignaciones", AsignacionViewSet, basename="asignacion")
 router.register(r'entries', EntryExportViewSet, basename='entries-exports')
 router.register(r'entries-management', EntryManagementViewSet, basename='entry-management')  # ← Agregar con los otros registros
-
-
+router.register(r'conexiones-sql', ConexionSQLViewSet, basename='conexion-sql')
+router.register(r'consultas-sql', ConsultaSQLViewSet, basename='consulta-sql')
 
 
 

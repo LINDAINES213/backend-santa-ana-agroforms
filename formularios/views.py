@@ -1,13 +1,14 @@
 import json
 from formularios.exports import content_bytes_para_un_form, excel_bytes_para_un_form, zip_bytes_todos_los_forms
-from .services import _materializar_dataset_para_campo, _uuid32, _uuid32_no_dashes, crear_campo_en_pagina
+from formularios.sql_service import SQLConnectionService
+from .services import _materializar_dataset_from_fuente, _uuid32, _uuid32_no_dashes, crear_campo_en_pagina
 from rest_framework import status, filters, viewsets
 from rest_framework.decorators import action
 from django.db import transaction
 from rest_framework.response import Response
 from django.db import models
-from .models import Campo, CampoGrupo, Categoria, Formulario, Formulario_Index_Version, FormularioEntry, FormularioIndexVersion, FuenteDatosValor, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
-from .serializers import AsignacionBulkSerializer, CampoSerializer, CampoUpdateSerializer, CategoriaSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioLiteSerializer, FormularioSerializer, FormularioUpdateSerializer, PaginaConCamposSerializer, PaginaSerializer, PaginaUpdateSerializer, UserFormularioSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer, UsuarioLiteSerializer, UsuarioUpdateSerializer
+from .models import Campo, CampoGrupo, Categoria, ConexionSQL, ConsultaSQL, Formulario, Formulario_Index_Version, FormularioEntry, FormularioIndexVersion, FuenteDatosValor, Grupo, Pagina, Pagina_Index_Version, PaginaCampo, PaginaVersion, UserFormulario, Usuario
+from .serializers import AsignacionBulkSerializer, CampoSerializer, CampoUpdateSerializer, CategoriaSerializer, ConexionSQLListSerializer, ConexionSQLSerializer, ConsultaSQLListSerializer, ConsultaSQLSerializer, CrearCampoEnPaginaSerializer, FormularioListSerializer, FormularioLiteSerializer, FormularioSerializer, FormularioUpdateSerializer, FuenteDatosListSerializer, PaginaConCamposSerializer, PaginaSerializer, PaginaUpdateSerializer, UserFormularioSerializer, UsuarioCreateSerializer, UsuarioDetalleSerializer, GrupoSerializer, UsuarioLiteSerializer, UsuarioUpdateSerializer
 from django.http import HttpResponse
 from django.utils import timezone
 import uuid
@@ -243,7 +244,7 @@ class FuenteDatosViewSet(viewsets.ModelViewSet):
                 if isinstance(cfg, str):
                     import json
                     cfg = json.loads(cfg or "{}")
-                inserted = _materializar_dataset_para_campo(cfg or {}, c)
+                inserted = _materializar_dataset_from_fuente(c, cfg or {})
                 # guardar config normalizada (la función puede ajustar columnas/alias)
                 c.config = json.dumps(cfg or {}, ensure_ascii=False)
                 c.save(update_fields=["config"])
@@ -1280,4 +1281,718 @@ class EntryManagementViewSet(viewsets.ReadOnlyModelViewSet):
             "por_estado": por_estado,
             "por_usuario": por_usuario,
             "fechas": fechas
+        })
+
+@extend_schema_view(
+    list=extend_schema(tags=["Fuentes Datos SQL"], summary="Listar conexiones SQL"),
+    retrieve=extend_schema(tags=["Fuentes Datos SQL"], summary="Ver detalle de conexión"),
+    create=extend_schema(tags=["Fuentes Datos SQL"], summary="Crear conexión SQL"),
+    partial_update=extend_schema(tags=["Fuentes Datos SQL"], summary="Actualizar conexión parcial"),
+    destroy=extend_schema(tags=["Fuentes Datos SQL"], summary="Eliminar conexión"),
+)
+class ConexionSQLViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar conexiones a bases de datos SQL externas
+    """
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+    queryset = ConexionSQL.objects.all()
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ConexionSQLListSerializer
+        return ConexionSQLSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(creado_por=self.request.user)
+    
+    @extend_schema(
+        tags=["Fuentes Datos SQL"],
+        summary="Probar conexión",
+        description="Prueba la conexión a la base de datos",
+        request=None,
+        responses={
+            200: OpenApiResponse(
+                description="Conexión exitosa",
+                response={
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "message": {"type": "string"}
+                    }
+                }
+            ),
+            400: OpenApiResponse(description="Error de conexión")
+        }
+    )
+    @action(detail=True, methods=['post'])
+    def probar(self, request, pk=None):
+        """
+        POST /api/conexiones-sql/{id}/probar/
+        
+        Prueba la conexión a la BD
+        """
+        conexion = self.get_object()
+        
+        success, error = SQLConnectionService.probar_conexion(conexion)
+        
+        if success:
+            return Response({
+                "success": True,
+                "message": "Conexión exitosa"
+            })
+        else:
+            return Response({
+                "success": False,
+                "message": f"Error de conexión: {error}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @extend_schema(
+        tags=["Fuentes Datos SQL"],
+        summary="Ejecutar query de prueba",
+        description="Ejecuta un query SQL en la conexión",
+        request=inline_serializer(
+            name='EjecutarQueryRequest',
+            fields={
+                'query': serializers.CharField(help_text="Query SQL a ejecutar")
+            }
+        ),
+        examples=[
+            OpenApiExample(
+                'Ejemplo query',
+                value={"query": "SELECT id, nombre FROM productos LIMIT 10"},
+                request_only=True,
+            )
+        ]
+    )
+    @action(detail=True, methods=['post'], url_path='ejecutar-query')
+    def ejecutar_query(self, request, pk=None):
+        """
+        POST /api/conexiones-sql/{id}/ejecutar-query/
+        
+        Body: {"query": "SELECT ..."}
+        """
+        conexion = self.get_object()
+        query = request.data.get('query')
+        
+        if not query:
+            return Response(
+                {"detail": "Debe proporcionar un query"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        columnas, datos, error = SQLConnectionService.ejecutar_query(
+            conexion,
+            query
+        )
+        
+        if error:
+            return Response(
+                {"detail": error},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return Response({
+            "columnas": columnas,
+            "datos": datos,
+            "total_registros": len(datos)
+        })
+
+
+@extend_schema_view(
+    list=extend_schema(tags=["Fuentes Datos SQL"], summary="Listar consultas SQL"),
+    retrieve=extend_schema(tags=["Fuentes Datos SQL"], summary="Ver detalle de consulta"),
+    create=extend_schema(tags=["Fuentes Datos SQL"], summary="Crear consulta SQL"),
+    destroy=extend_schema(tags=["Fuentes Datos SQL"], summary="Eliminar consulta"),
+)
+class ConsultaSQLViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar consultas SQL
+    """
+    queryset = ConsultaSQL.objects.all()
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ConsultaSQLListSerializer
+        return ConsultaSQLSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(creado_por=self.request.user)
+    
+    @extend_schema(
+        tags=["Fuentes Datos SQL"],
+        summary="Ejecutar consulta y ver resultados",
+        description="Ejecuta el query SQL y retorna la tabla completa con todas las columnas",
+        responses={200: OpenApiResponse(description="Resultados del query")}
+    )
+    @action(detail=True, methods=['get'], url_path='ejecutar')
+    def ejecutar(self, request, pk=None):
+        """
+        GET /api/consultas-sql/{id}/ejecutar/
+        
+        Ejecuta el query y retorna tabla completa
+        """
+        consulta = self.get_object()
+        
+        if not consulta.activo:
+            return Response(
+                {"detail": "Esta consulta está inactiva"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from .sql_service import SQLConnectionService
+        
+        columnas, datos, error = SQLConnectionService.ejecutar_query(
+            consulta.conexion,
+            consulta.query_sql
+        )
+        
+        if error:
+            return Response(
+                {"detail": error},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return Response({
+            "columnas": columnas,
+            "datos": datos,
+            "total": len(datos)
+        })
+
+
+# =============================================================================
+# BUSCA el segundo "class FuenteDatosViewSet" (línea ~1558) y REEMPLÁZALO:
+
+@extend_schema_view(
+    list=extend_schema(tags=["Fuentes de Datos"], summary="Listar fuentes de datos"),
+    retrieve=extend_schema(tags=["Fuentes de Datos"], summary="Ver detalle de fuente"),
+    destroy=extend_schema(tags=["Fuentes de Datos"], summary="Eliminar fuente de datos"),
+)
+class FuenteDatosViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar fuentes de datos (archivos Excel/CSV y SQL)
+    """
+    queryset = FuenteDatos.objects.all()
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return FuenteDatosListSerializer
+        return FuenteDatosSerializer
+    
+    @extend_schema(
+        summary="Crear fuente de datos",
+        description="""
+        Crea una fuente de datos desde un archivo (Excel/CSV) o desde una ConsultaSQL.
+        
+        **Opción 1: Archivo**
+        - Content-Type: multipart/form-data
+        - Campos: nombre, tipo_fuente='archivo', archivo (file)
+        
+        **Opción 2: SQL**
+        - Content-Type: application/json
+        - Campos: nombre, tipo_fuente='sql', consulta_sql (UUID)
+        """,
+        request={
+            'multipart/form-data': {
+                'type': 'object',
+                'properties': {
+                    'nombre': {'type': 'string'},
+                    'descripcion': {'type': 'string'},
+                    'tipo_fuente': {'type': 'string', 'enum': ['archivo', 'sql']},
+                    'archivo': {'type': 'string', 'format': 'binary'},
+                    'consulta_sql': {'type': 'string', 'format': 'uuid'}
+                }
+            }
+        }
+    )
+    def create(self, request, *args, **kwargs):
+        """
+        POST /api/fuentes-datos/
+        
+        Crea una fuente de datos (archivo o SQL)
+        """
+        tipo_fuente = request.data.get('tipo_fuente', 'archivo')
+        
+        if tipo_fuente == 'archivo':
+            return self._crear_desde_archivo(request)
+        elif tipo_fuente == 'sql':
+            return self._crear_desde_sql(request)
+        else:
+            return Response(
+                {"detail": "tipo_fuente debe ser 'archivo' o 'sql'"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    def _crear_desde_archivo(self, request):
+        """Crear fuente de datos desde archivo Excel/CSV"""
+        nombre = request.data.get('nombre')
+        descripcion = request.data.get('descripcion', '')
+        archivo = request.FILES.get('archivo')
+        
+        if not nombre:
+            return Response(
+                {"detail": "El campo 'nombre' es requerido"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not archivo:
+            return Response(
+                {"detail": "Debe proporcionar un archivo"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validar extensión
+        filename = archivo.name
+        extension = filename.split('.')[-1].lower()
+        if extension not in ['xlsx', 'xls', 'csv']:
+            return Response(
+                {"detail": "Solo se permiten archivos Excel (.xlsx, .xls) o CSV (.csv)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validar tamaño (máx 10MB)
+        if archivo.size > 10 * 1024 * 1024:
+            return Response(
+                {"detail": "El archivo no puede superar los 10MB"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Parsear archivo
+            from .azure_storage import AzureBlobStorageService
+            
+            columnas, preview_data = AzureBlobStorageService.parse_file_preview(
+                archivo, extension
+            )
+            
+            # Subir a Azure
+            azure_service = AzureBlobStorageService()
+            blob_name, blob_url = azure_service.upload_file(archivo, filename)
+            
+            # Crear fuente de datos
+            fuente = FuenteDatos.objects.create(
+                nombre=nombre,
+                descripcion=descripcion,
+                tipo_fuente='archivo',
+                archivo_nombre=filename,
+                blob_name=blob_name,
+                blob_url=blob_url,
+                tipo_archivo='excel' if extension in ['xlsx', 'xls'] else 'csv',
+                columnas=columnas,
+                preview_data=preview_data,
+                creado_por=request.user
+            )
+            
+            serializer = FuenteDatosSerializer(fuente)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response(
+                {"detail": f"Error procesando archivo: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    def _crear_desde_sql(self, request):
+        """Crear fuente de datos desde ConsultaSQL"""
+        nombre = request.data.get('nombre')
+        descripcion = request.data.get('descripcion', '')
+        consulta_sql_id = request.data.get('consulta_sql')
+        
+        if not nombre:
+            return Response(
+                {"detail": "El campo 'nombre' es requerido"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not consulta_sql_id:
+            return Response(
+                {"detail": "Debe proporcionar 'consulta_sql' (ID de la consulta)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verificar que la consulta existe
+        try:
+            consulta = ConsultaSQL.objects.get(id=consulta_sql_id)
+        except ConsultaSQL.DoesNotExist:
+            return Response(
+                {"detail": "La consulta SQL no existe"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Ejecutar consulta para obtener datos
+        from .sql_service import SQLConnectionService
+        
+        columnas, datos, error = SQLConnectionService.ejecutar_query(
+            consulta.conexion,
+            consulta.query_sql
+        )
+        
+        if error:
+            return Response(
+                {"detail": f"Error ejecutando consulta: {error}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Crear fuente de datos
+        fuente = FuenteDatos.objects.create(
+            nombre=nombre,
+            descripcion=descripcion,
+            tipo_fuente='sql',
+            consulta_sql=consulta,
+            columnas=columnas,
+            preview_data=datos[:5],  # Primeras 5 filas
+            creado_por=request.user
+        )
+        
+        serializer = FuenteDatosSerializer(fuente)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @extend_schema(
+        tags=["Fuentes de Datos"],
+        summary="Obtener datos completos de la fuente",
+        description="Retorna todos los datos de la fuente (tabla completa)",
+        responses={200: OpenApiResponse(description="Datos de la fuente")}
+    )
+    @action(detail=True, methods=['get'])
+    def datos(self, request, pk=None):
+        """
+        GET /api/fuentes-datos/{id}/datos/
+        
+        Retorna la tabla completa con todas las columnas
+        """
+        fuente = self.get_object()
+        
+        if fuente.tipo_fuente == 'archivo':
+            # Para archivos, retornar preview (limitado)
+            return Response({
+                "tipo": "archivo",
+                "columnas": fuente.columnas,
+                "datos": fuente.preview_data,
+                "total": len(fuente.preview_data),
+                "nota": "Preview limitado a 5 filas"
+            })
+        
+        elif fuente.tipo_fuente == 'sql':
+            # Para SQL, ejecutar query completo
+            from .sql_service import SQLConnectionService
+            
+            columnas, datos, error = SQLConnectionService.ejecutar_query(
+                fuente.consulta_sql.conexion,
+                fuente.consulta_sql.query_sql
+            )
+            
+            if error:
+                return Response(
+                    {"detail": error},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            return Response({
+                "tipo": "sql",
+                "columnas": columnas,
+                "datos": datos,
+                "total": len(datos)
+            })
+    
+    @extend_schema(
+        tags=["Fuentes de Datos"],
+        summary="Refrescar datos SQL",
+        description="Refresca los datos de fuentes SQL",
+        request=None
+    )
+    @action(detail=True, methods=['post'])
+    def refrescar(self, request, pk=None):
+        """
+        POST /api/fuentes-datos/{id}/refrescar/
+        
+        Solo para fuentes tipo SQL
+        """
+        fuente = self.get_object()
+        
+        if fuente.tipo_fuente != 'sql':
+            return Response(
+                {"detail": "Solo disponible para fuentes tipo SQL"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Ejecutar query de nuevo
+        from .sql_service import SQLConnectionService
+        
+        columnas, datos, error = SQLConnectionService.ejecutar_query(
+            fuente.consulta_sql.conexion,
+            fuente.consulta_sql.query_sql
+        )
+        
+        if error:
+            return Response(
+                {"detail": error},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Actualizar preview y columnas
+        fuente.columnas = columnas
+        fuente.preview_data = datos[:5]
+        fuente.save(update_fields=['columnas', 'preview_data'])
+        
+        return Response({
+            "detail": "Datos refrescados exitosamente",
+            "total": len(datos),
+            "columnas": columnas
+        })
+
+
+@extend_schema_view(
+    list=extend_schema(tags=["Fuentes de Datos"], summary="Listar fuentes de datos"),
+    retrieve=extend_schema(tags=["Fuentes de Datos"], summary="Ver detalle de fuente"),
+    create=extend_schema(
+        tags=["Fuentes de Datos"], 
+        summary="Crear fuente de datos (Archivo o SQL)",
+        description="""
+        Crea una fuente de datos. Puede ser de dos tipos:
+        
+        **Tipo 1: Archivo (Excel/CSV)**
+        - Sube un archivo Excel o CSV
+        - El sistema extrae las columnas automáticamente
+        
+        **Tipo 2: SQL**
+        - Usa una ConsultaSQL existente
+        - Los datos se obtienen ejecutando el query
+        """
+    ),
+    destroy=extend_schema(tags=["Fuentes de Datos"], summary="Eliminar fuente de datos"),
+)
+class FuenteDatosViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar fuentes de datos (archivos y SQL)
+    """
+    queryset = FuenteDatos.objects.all()
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return FuenteDatosListSerializer
+        return FuenteDatosSerializer
+    
+    @extend_schema(
+        request={
+            'multipart/form-data': {
+                'type': 'object',
+                'properties': {
+                    'nombre': {'type': 'string', 'example': 'Mi fuente de datos'},
+                    'descripcion': {'type': 'string', 'example': 'Descripción opcional'},
+                    'tipo_fuente': {
+                        'type': 'string', 
+                        'enum': ['archivo', 'sql'],
+                        'example': 'archivo'
+                    },
+                    # Para tipo archivo
+                    'archivo': {
+                        'type': 'string',
+                        'format': 'binary',
+                        'description': 'Archivo Excel o CSV (solo si tipo_fuente=archivo)'
+                    },
+                    # Para tipo SQL
+                    'consulta_sql': {
+                        'type': 'string',
+                        'format': 'uuid',
+                        'description': 'ID de ConsultaSQL (solo si tipo_fuente=sql)',
+                        'example': '3fa85f64-5717-4562-b3fc-2c963f66afa6'
+                    }
+                },
+                'required': ['nombre', 'tipo_fuente']
+            }
+        },
+        examples=[
+            OpenApiExample(
+                'Crear fuente desde archivo',
+                value={
+                    "nombre": "Productos Excel",
+                    "descripcion": "Lista de productos",
+                    "tipo_fuente": "archivo",
+                    "archivo": "(binary)"
+                },
+                request_only=True
+            ),
+            OpenApiExample(
+                'Crear fuente desde SQL',
+                value={
+                    "nombre": "Formularios SQL",
+                    "descripcion": "Formularios activos",
+                    "tipo_fuente": "sql",
+                    "consulta_sql": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                },
+                request_only=True
+            )
+        ]
+    )
+    def create(self, request, *args, **kwargs):
+        """
+        POST /api/fuentes-datos/
+        
+        Para archivo:
+        - Content-Type: multipart/form-data
+        - nombre, descripcion, tipo_fuente='archivo', archivo (file)
+        
+        Para SQL:
+        - Content-Type: application/json o multipart/form-data
+        - nombre, descripcion, tipo_fuente='sql', consulta_sql (UUID)
+        """
+        tipo_fuente = request.data.get('tipo_fuente', 'archivo')
+        
+        if tipo_fuente == 'archivo':
+            return self._crear_fuente_archivo(request)
+        elif tipo_fuente == 'sql':
+            return self._crear_fuente_sql(request)
+        else:
+            return Response(
+                {"detail": "tipo_fuente debe ser 'archivo' o 'sql'"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    def _crear_fuente_sql(self, request):
+        """Crear fuente de datos desde ConsultaSQL"""
+        nombre = request.data.get('nombre')
+        descripcion = request.data.get('descripcion', '')
+        consulta_sql_id = request.data.get('consulta_sql')
+        
+        if not nombre:
+            return Response(
+                {"detail": "El campo 'nombre' es requerido"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not consulta_sql_id:
+            return Response(
+                {"detail": "Debe proporcionar 'consulta_sql' (ID de la consulta)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Verificar que la consulta existe
+        try:
+            consulta = ConsultaSQL.objects.get(id=consulta_sql_id)
+        except ConsultaSQL.DoesNotExist:
+            return Response(
+                {"detail": "La consulta SQL no existe"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # ✅ CORRECCIÓN: Usar ejecutar_query en lugar de ejecutar_consulta_con_cache
+        from .sql_service import SQLConnectionService
+        
+        columnas, datos, error = SQLConnectionService.ejecutar_query(
+            consulta.conexion,
+            consulta.query_sql
+        )
+        
+        if error:
+            return Response(
+                {"detail": f"Error ejecutando consulta: {error}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Crear fuente de datos
+        fuente = FuenteDatos.objects.create(
+            nombre=nombre,
+            descripcion=descripcion,
+            tipo_fuente='sql',
+            consulta_sql=consulta,
+            columnas=columnas,  # ← Lista de todas las columnas
+            preview_data=datos[:5],  # Primeras 5 filas
+            creado_por=request.user
+        )
+        
+        serializer = FuenteDatosSerializer(fuente)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @extend_schema(
+        tags=["Fuentes de Datos"],
+        summary="Obtener datos de la fuente",
+        description="Retorna los datos de la fuente (desde archivo o SQL)",
+        responses={200: OpenApiResponse(description="Datos de la fuente")}
+    )
+    @action(detail=True, methods=['get'])
+    def datos(self, request, pk=None):
+        """
+        GET /api/fuentes-datos/{id}/datos/
+        
+        Retorna los datos de la fuente según su tipo
+        """
+        fuente = self.get_object()
+        
+        if fuente.tipo_fuente == 'archivo':
+            # Retornar preview_data directamente
+            return Response({
+                "tipo": "archivo",
+                "datos": fuente.preview_data,
+                "columnas": fuente.columnas,
+                "total": len(fuente.preview_data)
+            })
+        
+        elif fuente.tipo_fuente == 'sql':
+            # Ejecutar consulta con cache
+            from .sql_service import SQLConnectionService
+            
+            datos, error = SQLConnectionService.ejecutar_consulta_con_cache(
+                fuente.consulta_sql
+            )
+            
+            if error:
+                return Response(
+                    {"detail": error},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            return Response({
+                "tipo": "sql",
+                "datos": datos,
+                "columnas": fuente.columnas,
+                "total": len(datos),
+                "ultima_actualizacion": fuente.consulta_sql.ultima_ejecucion
+            })
+    
+    @extend_schema(
+        tags=["Fuentes de Datos"],
+        summary="Refrescar datos SQL",
+        description="Invalida el cache y refresca los datos de fuentes SQL",
+        request=None
+    )
+    @action(detail=True, methods=['post'])
+    def refrescar(self, request, pk=None):
+        """
+        POST /api/fuentes-datos/{id}/refrescar/
+        
+        Solo para fuentes tipo SQL
+        """
+        fuente = self.get_object()
+        
+        if fuente.tipo_fuente != 'sql':
+            return Response(
+                {"detail": "Solo disponible para fuentes tipo SQL"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Invalidar cache
+        from .sql_service import SQLConnectionService
+        
+        SQLConnectionService.invalidar_cache_consulta(str(fuente.consulta_sql.id))
+        
+        # Ejecutar consulta
+        datos, error = SQLConnectionService.ejecutar_consulta_con_cache(
+            fuente.consulta_sql
+        )
+        
+        if error:
+            return Response(
+                {"detail": error},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Actualizar preview
+        fuente.preview_data = datos[:5]
+        fuente.save(update_fields=['preview_data'])
+        
+        return Response({
+            "detail": "Datos refrescados exitosamente",
+            "total": len(datos)
         })

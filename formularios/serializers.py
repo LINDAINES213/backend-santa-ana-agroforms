@@ -12,6 +12,8 @@ from .models import (
 )
 from django.db import models
 from django.db.models import Q
+from rest_framework import serializers
+from .models import ConexionSQL, ConsultaSQL, FuenteDatos
 
 class GrupoSerializer(serializers.ModelSerializer):
     id_campo_group = serializers.CharField(source="id_campo_group_id", read_only=True)
@@ -713,3 +715,149 @@ class EntryRespuestaUpdateSerializer(serializers.Serializer):
         instance.updated_at = timezone.now()
         instance.save()
         return instance
+    
+class ConexionSQLSerializer(serializers.ModelSerializer):
+    """Serializer para crear/editar conexiones SQL"""
+    password = serializers.CharField(write_only=True, help_text="Contraseña (se encriptará automáticamente)")
+    
+    class Meta:
+        model = ConexionSQL
+        fields = [
+            'id', 'nombre', 'descripcion', 'tipo_bd',
+            'host', 'puerto', 'database', 'usuario', 'password',
+            'activo', 'fecha_creacion', 'creado_por', 'opciones_extra'
+        ]
+        read_only_fields = ['id', 'fecha_creacion', 'creado_por']
+    
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        conexion = ConexionSQL(**validated_data)
+        conexion.set_password(password)
+        conexion.save()
+        return conexion
+    
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        if password:
+            instance.set_password(password)
+        
+        instance.save()
+        return instance
+
+
+class ConexionSQLListSerializer(serializers.ModelSerializer):
+    """Serializer para listar conexiones (sin password)"""
+    creado_por_nombre = serializers.CharField(source='creado_por.nombre', read_only=True)
+    total_consultas = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ConexionSQL
+        fields = [
+            'id', 'nombre', 'descripcion', 'tipo_bd',
+            'host', 'puerto', 'database', 'usuario',
+            'activo', 'fecha_creacion', 'creado_por_nombre',
+            'total_consultas'
+        ]
+    
+    def get_total_consultas(self, obj):
+        return obj.consultas.count()
+
+
+class ConsultaSQLSerializer(serializers.ModelSerializer):
+    """Serializer para crear/editar consultas SQL"""
+    
+    class Meta:
+        model = ConsultaSQL
+        fields = [
+            'id', 'conexion', 'nombre', 'descripcion', 'query_sql',
+            'cache_minutos', 'activo', 'fecha_creacion', 'creado_por',
+            'ultima_ejecucion'
+        ]
+        read_only_fields = ['id', 'fecha_creacion', 'creado_por', 'ultima_ejecucion']
+    
+    def validate_query_sql(self, value):
+        """Validar que el query sea seguro"""
+        from .sql_service import SQLConnectionService
+        
+        is_valid, error = SQLConnectionService.validar_query(value)
+        if not is_valid:
+            raise serializers.ValidationError(error)
+        
+        return value
+
+
+class ConsultaSQLListSerializer(serializers.ModelSerializer):
+    """Serializer para listar consultas"""
+    conexion_nombre = serializers.CharField(source='conexion.nombre', read_only=True)
+    conexion_tipo = serializers.CharField(source='conexion.tipo_bd', read_only=True)
+    creado_por_nombre = serializers.CharField(source='creado_por.nombre', read_only=True)
+    total_fuentes = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ConsultaSQL
+        fields = [
+            'id', 'nombre', 'descripcion', 'conexion', 'conexion_nombre',
+            'conexion_tipo', 'cache_minutos', 'activo', 'fecha_creacion',
+            'creado_por_nombre', 'ultima_ejecucion', 'total_fuentes'
+        ]
+    
+    def get_total_fuentes(self, obj):
+        return obj.fuentes_datos.count()
+
+
+class FuenteDatosSerializer(serializers.ModelSerializer):
+    """Serializer actualizado para soportar archivos y SQL"""
+    
+    class Meta:
+        model = FuenteDatos
+        fields = [
+            'id', 'nombre', 'descripcion', 'tipo_fuente',
+            'archivo_nombre', 'blob_name', 'blob_url', 'tipo_archivo',
+            'consulta_sql', 'columnas', 'preview_data',
+            'fecha_subida', 'activo', 'creado_por'
+        ]
+        read_only_fields = ['id', 'fecha_subida', 'creado_por', 'columnas', 'preview_data']
+    
+    def validate(self, data):
+        """Validar que tenga archivo O consulta SQL según el tipo"""
+        tipo_fuente = data.get('tipo_fuente')
+        
+        if tipo_fuente == 'archivo':
+            if not data.get('archivo_nombre'):
+                raise serializers.ValidationError(
+                    "Fuente tipo 'archivo' requiere archivo_nombre"
+                )
+        elif tipo_fuente == 'sql':
+            if not data.get('consulta_sql'):
+                raise serializers.ValidationError(
+                    "Fuente tipo 'sql' requiere consulta_sql"
+                )
+        
+        return data
+
+
+class FuenteDatosListSerializer(serializers.ModelSerializer):
+    """Serializer para listar fuentes de datos"""
+    creado_por_nombre = serializers.CharField(source='creado_por.nombre', read_only=True)
+    consulta_sql_nombre = serializers.CharField(source='consulta_sql.nombre', read_only=True, allow_null=True)
+    total_columnas = serializers.SerializerMethodField()
+    total_registros = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = FuenteDatos
+        fields = [
+            'id', 'nombre', 'descripcion', 'tipo_fuente',
+            'archivo_nombre', 'tipo_archivo', 'consulta_sql_nombre',
+            'total_columnas', 'total_registros',
+            'fecha_subida', 'activo', 'creado_por_nombre'
+        ]
+    
+    def get_total_columnas(self, obj):
+        return len(obj.columnas) if obj.columnas else 0
+    
+    def get_total_registros(self, obj):
+        return len(obj.preview_data) if obj.preview_data else 0

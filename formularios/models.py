@@ -384,41 +384,76 @@ class ConexionSQL(models.Model):
     
     def set_password(self, raw_password: str):
         """Encripta y guarda la contraseña"""
-        key = self._get_encryption_key()
-        f = Fernet(key)
-        self.password_encrypted = f.encrypt(raw_password.encode())
-    
-    def get_password(self) -> str:
-        """Desencripta y retorna la contraseña"""
-        key = self._get_encryption_key()
-        f = Fernet(key)
-        return f.decrypt(self.password_encrypted).decode()
-    
-    @staticmethod
-    def _get_encryption_key():
-        """Obtiene la clave de encriptación desde settings o env"""
+        from cryptography.fernet import Fernet
+        from django.conf import settings
+        import os
+        
         key = getattr(settings, 'SQL_PASSWORD_ENCRYPTION_KEY', None)
         if not key:
             key = os.getenv('SQL_PASSWORD_ENCRYPTION_KEY')
         if not key:
             raise ValueError("SQL_PASSWORD_ENCRYPTION_KEY no está configurada")
-        return key.encode()
+        
+        # ✅ Asegurar que key sea bytes
+        if isinstance(key, str):
+            key = key.encode()
+        
+        f = Fernet(key)
+        
+        # ✅ Asegurar que password sea bytes
+        if isinstance(raw_password, str):
+            raw_password = raw_password.encode()
+        
+        self.password_encrypted = f.encrypt(raw_password)
+
+    def get_password(self) -> str:
+        """Desencripta y retorna la contraseña"""
+        from cryptography.fernet import Fernet
+        from django.conf import settings
+        import os
+        
+        # Obtener clave
+        key = getattr(settings, 'SQL_PASSWORD_ENCRYPTION_KEY', None)
+        if not key:
+            key = os.getenv('SQL_PASSWORD_ENCRYPTION_KEY')
+        if not key:
+            raise ValueError("SQL_PASSWORD_ENCRYPTION_KEY no está configurada")
+        
+        # Asegurar que key sea bytes
+        if isinstance(key, str):
+            key = key.encode()
+        
+        f = Fernet(key)
+        
+        # ✅ SOLUCIÓN: Convertir password_encrypted a bytes si no lo es
+        password_data = self.password_encrypted
+        
+        # Si es memoryview, convertir a bytes
+        if isinstance(password_data, memoryview):
+            password_data = password_data.tobytes()
+        # Si no es bytes ni memoryview, intentar conversión
+        elif not isinstance(password_data, bytes):
+            password_data = bytes(password_data)
+        
+        # Desencriptar
+        decrypted = f.decrypt(password_data)
+        
+        # Retornar como string
+        if isinstance(decrypted, bytes):
+            return decrypted.decode()
+        return decrypted
 
 
 class ConsultaSQL(models.Model):
     """
-    Almacena queries SQL que se ejecutan en conexiones externas
+    Almacena queries SQL simples.
+    Solo guarda el query, retorna tabla completa.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     conexion = models.ForeignKey(ConexionSQL, on_delete=models.CASCADE, related_name='consultas')
     nombre = models.CharField(max_length=200)
     descripcion = models.TextField(blank=True)
     query_sql = models.TextField(help_text="Query SQL (solo SELECT permitido)")
-    
-    # Configuración para mapeo de datos
-    columna_value = models.CharField(max_length=100, help_text="Columna que se usará como 'value'")
-    columna_label = models.CharField(max_length=100, help_text="Columna que se usará como 'label'")
-    columnas_extra = models.JSONField(default=list, blank=True, help_text="Columnas adicionales a incluir")
     
     # Cache
     cache_minutos = models.IntegerField(default=60, help_text="Tiempo de cache en minutos")
@@ -434,7 +469,7 @@ class ConsultaSQL(models.Model):
         ordering = ['nombre']
     
     def __str__(self):
-        return f"{self.nombre} - {self.conexion.nombre}"
+        return f"{self.nombre}"
     
 class FuenteDatos(models.Model):
     """
