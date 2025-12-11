@@ -39,10 +39,14 @@ class SQLConnectionService:
         elif conexion.tipo_bd == 'mysql':
             return f"mysql+pymysql://{usuario_escaped}:{password_escaped}@{conexion.host}:{conexion.puerto}/{conexion.database}"
         
+        # elif conexion.tipo_bd == 'sqlserver':
+        #     driver = conexion.opciones_extra.get('driver', 'ODBC Driver 17 for SQL Server')
+        #     driver_escaped = quote_plus(driver)
+        #     return f"mssql+pyodbc://{usuario_escaped}:{password_escaped}@{conexion.host}:{conexion.puerto}/{conexion.database}?driver={driver_escaped}"
+        
         elif conexion.tipo_bd == 'sqlserver':
-            driver = conexion.opciones_extra.get('driver', 'ODBC Driver 17 for SQL Server')
-            driver_escaped = quote_plus(driver)
-            return f"mssql+pyodbc://{usuario_escaped}:{password_escaped}@{conexion.host}:{conexion.puerto}/{conexion.database}?driver={driver_escaped}"
+            # Usar pymssql en lugar de pyodbc
+            return f"mssql+pymssql://{usuario_escaped}:{password_escaped}@{conexion.host}:{conexion.puerto}/{conexion.database}?timeout=10"
         
         elif conexion.tipo_bd == 'oracle':
             return f"oracle+cx_oracle://{usuario_escaped}:{password_escaped}@{conexion.host}:{conexion.puerto}/{conexion.database}"
@@ -58,11 +62,18 @@ class SQLConnectionService:
         """
         try:
             connection_string = SQLConnectionService.crear_connection_string(conexion)
-            engine = create_engine(
-                connection_string,
-                connect_args={'connect_timeout': 10},
-                pool_pre_ping=True
-            )
+            # SQL Server con pymssql no necesita connect_args
+            if conexion.tipo_bd == 'sqlserver':
+                engine = create_engine(
+                    connection_string,
+                    pool_pre_ping=True
+                )
+            else:
+                engine = create_engine(
+                    connection_string,
+                    connect_args={'connect_timeout': 10},
+                    pool_pre_ping=True
+                )
             
             # Intentar conectar y hacer un query simple
             with engine.connect() as conn:
@@ -136,11 +147,17 @@ class SQLConnectionService:
                 return [], [], f"Error creando connection string: {str(e)}"
             
             try:
-                engine = create_engine(
-                    connection_string,
-                    connect_args={'connect_timeout': 30},
-                    pool_pre_ping=True
-                )
+                if conexion.tipo_bd == 'sqlserver':
+                    engine = create_engine(
+                        connection_string,
+                        pool_pre_ping=True
+                    )
+                else:
+                    engine = create_engine(
+                        connection_string,
+                        connect_args={'connect_timeout': 30},
+                        pool_pre_ping=True
+                    )
             except Exception as e:
                 return [], [], f"Error conectando a BD: {str(e)}"
             
