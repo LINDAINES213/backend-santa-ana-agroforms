@@ -364,7 +364,7 @@ class ConexionSQL(models.Model):
     tipo_bd = models.CharField(max_length=20, choices=TIPO_BD_CHOICES)
     host = models.CharField(max_length=255)
     puerto = models.IntegerField()
-    database = models.CharField(max_length=100)
+    database = models.CharField(max_length=200, blank=True, default='', help_text="Nombre de la base de datos")
     usuario = models.CharField(max_length=100)
     password_encrypted = models.BinaryField()  # Contraseña encriptada
     
