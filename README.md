@@ -47,22 +47,6 @@
 
 ## 🚀 Quickstart
 
-## 🔧 Configuración (.env)
-
-Variables necesarias para correr la API, reemplazar los valores a la derecha por los reales:
-
-```dotenv
-DATABASE_HOST=HOST
-DATABASE_USER=USER
-DATABASE_PASSWORD=PASSWORD
-DATABASE_NAME=DB
-
-AZURE_STORAGE_CONNECTION_STRING=STRING
-AZURE_CONTAINER=CONTAINER
-AZURE_ACCOUNT_NAME=ACCOUNT
-AZURE_ACCOUNT_KEY=KEY
-```
-
 ## 🐳 Imagen desde Docker Hub
 
 Es posible ejecutar la API con la imagen almacenada en Docker Hub de manera local en nuestro equipo. Para ello se necesita tener Docker Desktop instalado y corriendo, ya con ello se puede proceder a realizar el pull de la imagen de las siguientes formas:
@@ -137,6 +121,57 @@ python manage.py runserver 8081
 Visita: [http://localhost:8081/api/docs](http://localhost:8081/api/docs)
 
 ---
+
+> Nota: Para la creación de la base de datos, primero usuario y .env es necesario clonar el repositorio para poder generar keys, usuarios y lo que se presenta más abajo en caso se quiera desplegar en otra plataforma.
+
+## 🔑 Generación de Keys
+
+Para el .env es necesario tener au propia SECRET_KEY y SQL_PASSWORD_ENCRYPTION_KEY, por lo que para generarlas se debe correr los siguientes archivos individualmente cada uno dentro de la carpeta `formularios` al clonar el repositorio con el código:
+
+- `fernet.py`: Dará la SQL_PASSWORD_ENCRYPTION_KEY para reemplazar en el .env
+- `django_key`: Dará la SECRET_KEY para reemplazar en el .env
+
+Ya con eso se puede continuar a generar las propias credenciales para la base de datos PostgreSQL propia a usar y el contenedor de AZURE STORAGE para que sea posible subir fuentes de datos en formato excel.
+
+## 🔧 Configuración (.env)
+
+Variables necesarias para correr la API, reemplazar los valores a la derecha por los reales:
+
+```dotenv
+SECRET_KEY=TU-DJANGO-KEY
+
+DATABASE_HOST=TU-HOST
+DATABASE_USER=TU-USER
+DATABASE_PASSWORD=TU-PASSWORD
+DATABASE_NAME=TU-DB-NAME
+
+AZURE_STORAGE_CONNECTION_STRING=TU-CONNECTION-STRING
+AZURE_CONTAINER=TU-CONTAINER
+AZURE_ACCOUNT_NAME=TU-ACCOUNT-NAME
+AZURE_ACCOUNT_KEY=TU-ACCOUNT-KEY
+
+SQL_PASSWORD_ENCRYPTION_KEY=TU-SQL-PASS-KEY
+```
+
+## 📝 Creación de la Base de Datos
+
+Para una mejor compatibilidad se sugiere correr los siguientes comandos con las migraciones ya generadas para la creación de las tablas necesarias para correr el proyecto, por lo que se debería de crear una base de datos en blanco:
+
+```bash
+python manage.py makemigrations
+```
+
+```bash
+python manage.py migrate
+```
+
+## 👩🏽‍💻 Creación de primer usuario
+
+Ya teniendo la base de datos creada se sugiere correr el siguiente archivo para la creación de un usuario administrador con acceso a la plataforma web con el cual ya puede iniciar sesión desde el LogIn de la plataforma web, el archivo se encuentra en la carpeta raíz:
+
+- `super_user.py`: Se debe cambiar las variables por el nombre de usuario real, nombre, correo, contraseña, etc. Los otros campos se dejan en True para tener acceso a la plataforma web y quede activo el usuario.
+
+Ya con estas configuraciones se puede realizar un inicio de sesión en la plataforma, e igualmente se puede usar el .env creado anteriormente para el uso de la API desplegada en donde se encuentre o la desee desplegar
 
 ## 🚀 API Desplegada
 
