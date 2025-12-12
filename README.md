@@ -47,65 +47,6 @@
 
 ## 🚀 Quickstart
 
-## 🐳 Imagen desde Docker Hub
-
-Es posible ejecutar la API con la imagen almacenada en Docker Hub de manera local en nuestro equipo. Para ello se necesita tener Docker Desktop instalado y corriendo, ya con ello se puede proceder a realizar el pull de la imagen de las siguientes formas:
-
-> Nota: Tomar en cuenta que ambas formas se deben ejecutar o crear el archivo `.yml` dentro de la carpeta donde se encuentre las credencuales en el archivo .env
-
-### >_ PowerShell
-
-Al tener listo Docker Desktop se deben ejecutar los siguientes comandos desde PowerShell:
-
-```bash
-docker pull lindain1333/santa-ana-api
-```
-
-```bash
-docker run -d `
-  --name agroforms-api `
-  --env-file "${pwd}\.env" `
-  -p 8082:8082 `
-  lindain1333/santa-ana-api:latest `
-  python manage.py runserver 0.0.0.0:8082
-```
-
-### 🐋 Docker Compose
-
-Para utilizar Docker Compose debemos empezar creando nuestro archivo `docker-compose.yml` de la siguiente manera:
-
-```bash
-services:
-  api:
-    image: lindain1333/santa-ana-api:latest
-    container_name: agroforms-api2
-    env_file: .env
-    ports:
-      - "${PORT:-8082}:8082"
-    command: >
-      sh -c "
-        python manage.py migrate &&
-        python manage.py collectstatic --noinput || true &&
-        python manage.py runserver 0.0.0.0:${PORT:-8082}
-      "
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-8082}/api/docs >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-```
-
-Luego de ello ejecutamos los siguientes comandos:
-
-```bash
-docker compose up -d
-docker compose logs -f api         
-```
-
-> Si se usa el puerto 8082 en cualquiera de los dos casos anteriores visualizar la API en [http://localhost:8082/api/docs](http://localhost:8082/api/docs), sino reemplazar por el puerto que se coloque
-
----
-
 ## 💻 Desarrollo local (sin Docker)
 
 Si se quiere clonar el proyeto completo desde GitHub se debe abrir una terminal dentro de la carpeta del proyecto y correr los siguientes comandos:
@@ -172,6 +113,65 @@ Ya teniendo la base de datos creada se sugiere correr el siguiente archivo para 
 - `super_user.py`: Se debe cambiar las variables por el nombre de usuario real, nombre, correo, contraseña, etc. Los otros campos se dejan en True para tener acceso a la plataforma web y quede activo el usuario.
 
 Ya con estas configuraciones se puede realizar un inicio de sesión en la plataforma, e igualmente se puede usar el .env creado anteriormente para el uso de la API desplegada en donde se encuentre o la desee desplegar
+
+## 🐳 Imagen desde Docker Hub
+
+Es posible ejecutar la API con la imagen almacenada en Docker Hub de manera local en nuestro equipo. Para ello se necesita tener Docker Desktop instalado y corriendo, ya con ello se puede proceder a realizar el pull de la imagen de las siguientes formas:
+
+> Nota: Tomar en cuenta que ambas formas se deben ejecutar o crear el archivo `.yml` dentro de la carpeta donde se encuentre las credencuales en el archivo .env
+
+### >_ PowerShell
+
+Al tener listo Docker Desktop se deben ejecutar los siguientes comandos desde PowerShell:
+
+```bash
+docker pull lindain1333/santa-ana-api
+```
+
+```bash
+docker run -d `
+  --name agroforms-api `
+  --env-file "${pwd}\.env" `
+  -p 8082:8082 `
+  lindain1333/santa-ana-api:latest `
+  python manage.py runserver 0.0.0.0:8082
+```
+
+### 🐋 Docker Compose
+
+Para utilizar Docker Compose debemos empezar creando nuestro archivo `docker-compose.yml` de la siguiente manera:
+
+```bash
+services:
+  api:
+    image: lindain1333/santa-ana-api:latest
+    container_name: agroforms-api2
+    env_file: .env
+    ports:
+      - "${PORT:-8082}:8082"
+    command: >
+      sh -c "
+        python manage.py migrate &&
+        python manage.py collectstatic --noinput || true &&
+        python manage.py runserver 0.0.0.0:${PORT:-8082}
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-8082}/api/docs >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+```
+
+Luego de ello ejecutamos los siguientes comandos:
+
+```bash
+docker compose up -d
+docker compose logs -f api         
+```
+
+> Si se usa el puerto 8082 en cualquiera de los dos casos anteriores visualizar la API en [http://localhost:8082/api/docs](http://localhost:8082/api/docs), sino reemplazar por el puerto que se coloque
+
+---
 
 ## 🚀 API Desplegada
 
