@@ -554,7 +554,9 @@ class UserTerminal(models.Model):
         on_delete=models.CASCADE,
         to_field='nombre_usuario',
         db_column='nombre_usuario',
-        related_name='terminales'
+        related_name='terminales',
+        null=True,
+        blank=True
     )
     
     terminal_info = models.TextField(

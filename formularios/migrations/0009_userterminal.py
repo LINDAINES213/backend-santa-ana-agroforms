@@ -32,7 +32,6 @@ class Migration(migrations.Migration):
                 "verbose_name_plural": "Terminales de Usuario",
                 "db_table": "formularios_user_terminal",
                 "ordering": ["-date"],
-                "managed": False,
             },
         ),
     ]
