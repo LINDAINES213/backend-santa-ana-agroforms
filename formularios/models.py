@@ -58,6 +58,7 @@ class Usuario(AbstractBaseUser, PermissionsMixin):
 
 
     class Meta:
+        # managed = False
         db_table = "formularios_usuario"
         ordering = ("nombre",)
 
@@ -282,6 +283,7 @@ class FuenteDatosValor(models.Model):
     creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        # managed = False
         db_table = "formularios_fuente_datos_valor"
         indexes = [
             models.Index(fields=["campo", "label_text"]),
@@ -300,6 +302,7 @@ class Grupo(models.Model):
     nombre = models.CharField(max_length=150, db_column="nombre")
 
     class Meta:
+        # managed = False
         db_table = "formularios_grupo"
 
     def __str__(self):
@@ -320,6 +323,7 @@ class CampoGrupo(models.Model):
     )
 
     class Meta:
+        # managed = False
         db_table = "formularios_campo_grupo"
         unique_together = (("id_grupo", "id_campo"),)
 
@@ -376,6 +380,7 @@ class ConexionSQL(models.Model):
     opciones_extra = models.JSONField(default=dict, blank=True)
     
     class Meta:
+        # managed = False
         db_table = 'formularios_conexion_sql'
         ordering = ['nombre']
     
@@ -465,6 +470,7 @@ class ConsultaSQL(models.Model):
     creado_por = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, related_name='consultas_sql')
     
     class Meta:
+        # managed = False
         db_table = 'formularios_consulta_sql'
         ordering = ['nombre']
     
@@ -525,6 +531,7 @@ class FuenteDatos(models.Model):
     )
 
     class Meta:
+        # managed = False
         db_table = 'formularios_fuente_datos'
         ordering = ['-fecha_subida']
 

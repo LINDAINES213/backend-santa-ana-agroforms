@@ -112,6 +112,8 @@ DATABASES = {
         "ATOMIC_REQUESTS": True,                                   # transacciones por request
         "OPTIONS": {
             "sslmode": os.getenv("PGSSLMODE", "require"),
+            # "sslmode": os.getenv("PGSSLMODE", "disable"),
+
             # "sslrootcert": PGSSLROOTCERT,
         },
     }

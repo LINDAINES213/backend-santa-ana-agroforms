@@ -11,6 +11,5 @@ certs/**/*.p12
 *.pem
 *.pfx
 *.dump
-*.sql
 .coverage
 staticfiles/
