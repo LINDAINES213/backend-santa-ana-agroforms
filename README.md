@@ -105,6 +105,7 @@ python manage.py makemigrations
 ```bash
 python manage.py migrate
 ```
+En caso de usar el archivo .sql se sugiere correr igualmente los comandos previamente dados para verificar que el backend sea compatible con las tablas creadas en la base de datos. En dado caso se tengan problemas con el uso de las tablas cuando se corra el codigo puede contactarnos para corregir el codigo correspondiente.
 
 ## 👩🏽‍💻 Creación de primer usuario
 
