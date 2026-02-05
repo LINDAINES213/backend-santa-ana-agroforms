@@ -1,0 +1,11 @@
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('boolean', '{}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('calc', '{"vars": ["string[]"], "operation": ["string"]}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('date', '{}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('firm', '{}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('group', '{"id_group": ["string"], "name": ["string"], "fieldCondition": ["string"]}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('hour', '{}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('list', '{"id_list": ["string"], "items": ["string", "number", "boolean"]}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('number', '{"min": [null, "number"], "max": [null, "number"], "step": [null, "number"], "unit": [null, "$", "€", "£", "Q"]}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('string', '{}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('text', '{}');
+INSERT INTO public.formularios_clase_campo (clase, estructura) VALUES ('dataset', '{"fuente_id": ["string"], "mode": ["string"], "column": ["string"], "key_column": ["string""], "label_column": ["string"], "version": ["number"], "cache_inline": ["boolean"], "max_items_inline":["number"]}');
