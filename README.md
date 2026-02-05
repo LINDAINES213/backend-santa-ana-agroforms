@@ -107,6 +107,8 @@ python manage.py migrate
 ```
 En caso de usar el archivo .sql se sugiere correr igualmente los comandos previamente dados para verificar que el backend sea compatible con las tablas creadas en la base de datos. En dado caso se tengan problemas con el uso de las tablas cuando se corra el codigo puede contactarnos para corregir el codigo correspondiente.
 
+Al crear la base de datos se debe realiazr el insert de clases de campos con el archivo `formularios_clase_campo.sql` ya que es necesario para crear formularios en la plataforma.
+
 ## 👩🏽‍💻 Creación de primer usuario
 
 Ya teniendo la base de datos creada se sugiere correr el siguiente archivo para la creación de un usuario administrador con acceso a la plataforma web con el cual ya puede iniciar sesión desde el LogIn de la plataforma web, el archivo se encuentra en la carpeta raíz:
